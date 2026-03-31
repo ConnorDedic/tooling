@@ -8,7 +8,6 @@ env:
   NMAP_VERSION: "7.94"
   DOTNET_NOLOGO: "true"
   DOTNET_CLI_TELEMETRY_OPTOUT: "true"
-  # Opt all JS actions into Node 24 now to silence deprecation warnings
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
@@ -28,13 +27,14 @@ jobs:
           GOARCH=386 GOOS=windows go build -o kerbrute.exe
           GOARCH=386 GOOS=linux   go build -o kerbrute_linux
           zip ../kerbrute-windows-x86.zip kerbrute.exe
-          zip ../kerbrute-linux-x86.zip   kerbrute_linux
+          zip ../kerbrute-linux-x86.zip kerbrute_linux
       - uses: actions/upload-artifact@v4
         with:
           name: kerbrute
-          path: "*.zip"
+          path: |
+            *.zip
 
-  # ── sharphound (net472 – must use Windows + MSBuild) ────────────────────────
+  # ── sharphound ─────────────────────────────────────────────────────────────
   sharphound:
     runs-on: windows-latest
     steps:
@@ -49,24 +49,31 @@ jobs:
           git clone https://github.com/SpecterOps/SharpHound.git
           cd SharpHound
           $proj = Get-ChildItem -Recurse -Filter "*.csproj" | Select-Object -First 1
-          $framework = (Select-String -Path $proj.FullName -Pattern '<TargetFramework>(.+?)</TargetFramework>').Matches[0].Groups[1].Value
+          $projContent = Get-Content $proj.FullName -Raw
+          if ($projContent -match '<TargetFramework>(.+?)</TargetFramework>') {
+              $framework = $Matches[1]
+          } elseif ($projContent -match '<TargetFrameworks>(.+?)</TargetFrameworks>') {
+              $framework = $Matches[1].Split(';')[0]
+          } else {
+              $framework = "net462"
+          }
           Write-Host "Detected framework: $framework"
           dotnet restore $proj.FullName
-          # net4xx → MSBuild; netX.Y → dotnet publish
           if ($framework -like "net4*") {
-            msbuild $proj.FullName /p:Configuration=Release /p:Platform="Any CPU" /m
-            $outDir = Join-Path $proj.DirectoryName "bin\Release"
-            Compress-Archive "$outDir\*" ..\..\sharphound-windows.zip
+              msbuild $proj.FullName /p:Configuration=Release /p:Platform="AnyCPU" /m
+              $outDir = Get-ChildItem -Path $proj.DirectoryName -Recurse -Directory | Where-Object { $_.FullName -match "bin\\Release" } | Sort-Object FullName -Descending | Select-Object -First 1
+              Compress-Archive "$($outDir.FullName)\*" ..\..\sharphound-windows.zip
           } else {
-            dotnet publish $proj.FullName -c Release -f $framework -r win-x64 --self-contained true -o out\win
-            Compress-Archive out\win\* ..\..\sharphound-windows.zip
+              dotnet publish $proj.FullName -c Release -f $framework -r win-x64 --self-contained true -o out\win
+              Compress-Archive out\win\* ..\..\sharphound-windows.zip
           }
       - uses: actions/upload-artifact@v4
         with:
           name: sharphound
-          path: "*.zip"
+          path: |
+            *.zip
 
-  # ── mimikatz (Windows + vswhere via pwsh) ────────────────────────────────────
+  # ── mimikatz ───────────────────────────────────────────────────────────────
   mimikatz:
     runs-on: windows-latest
     steps:
@@ -81,23 +88,22 @@ jobs:
             -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
             -property installationPath
           Write-Host "VS path: $vsPath"
-          # Run vcvars32 + msbuild inside a single cmd invocation
           $vcvars = "$vsPath\VC\Auxiliary\Build\vcvars32.bat"
           cmd /c "`"$vcvars`" && msbuild mimikatz\mimikatz.sln /p:Configuration=Release /p:Platform=Win32 /m"
       - name: Package
         shell: pwsh
         run: |
-          $exe = Get-ChildItem -Path mimikatz -Recurse -Filter mimikatz.exe | `
-                 Where-Object { $_.FullName -match "Win32\\Release" } | `
-                 Select-Object -First 1
+          $exe = Get-ChildItem -Path mimikatz -Recurse -Filter mimikatz.exe | Select-Object -First 1
+          if (-not $exe) { throw "mimikatz.exe not found" }
           Copy-Item $exe.FullName mimikatz.exe
           Compress-Archive mimikatz.exe mimikatz-windows-x86.zip
       - uses: actions/upload-artifact@v4
         with:
           name: mimikatz
-          path: mimikatz-windows-x86.zip
+          path: |
+            mimikatz-windows-x86.zip
 
-  # ── rubeus (net462 – Windows + MSBuild) ─────────────────────────────────────
+  # ── rubeus ────────────────────────────────────────────────────────────────
   rubeus:
     runs-on: windows-latest
     steps:
@@ -112,23 +118,31 @@ jobs:
           git clone https://github.com/GhostPack/Rubeus.git
           cd Rubeus
           $proj = Get-ChildItem -Recurse -Filter "*.csproj" | Select-Object -First 1
-          $framework = (Select-String -Path $proj.FullName -Pattern '<TargetFramework>(.+?)</TargetFramework>').Matches[0].Groups[1].Value
+          $projContent = Get-Content $proj.FullName -Raw
+          if ($projContent -match '<TargetFramework>(.+?)</TargetFramework>') {
+              $framework = $Matches[1]
+          } elseif ($projContent -match '<TargetFrameworks>(.+?)</TargetFrameworks>') {
+              $framework = $Matches[1].Split(';')[0]
+          } else {
+              $framework = "net462"
+          }
           Write-Host "Framework: $framework"
           dotnet restore $proj.FullName
           if ($framework -like "net4*") {
-            msbuild $proj.FullName /p:Configuration=Release /p:Platform="Any CPU" /m
-            $outDir = Join-Path $proj.DirectoryName "bin\Release"
-            Compress-Archive "$outDir\Rubeus.exe" ..\..\rubeus-windows.zip
+              msbuild $proj.FullName /p:Configuration=Release /p:Platform="AnyCPU" /m
+              $outDir = Get-ChildItem -Path $proj.DirectoryName -Recurse -Directory | Where-Object { $_.FullName -match "bin\\Release" } | Sort-Object FullName -Descending | Select-Object -First 1
+              Compress-Archive "$($outDir.FullName)\Rubeus.exe" ..\..\rubeus-windows.zip
           } else {
-            dotnet publish $proj.FullName -c Release -r win-x64 --self-contained true -o out\win
-            Compress-Archive out\win\* ..\..\rubeus-windows.zip
+              dotnet publish $proj.FullName -c Release -r win-x64 --self-contained true -o out\win
+              Compress-Archive out\win\* ..\..\rubeus-windows.zip
           }
       - uses: actions/upload-artifact@v4
         with:
           name: rubeus
-          path: "*.zip"
+          path: |
+            *.zip
 
-  # ── inveigh (Windows + MSBuild fallback) ─────────────────────────────────────
+  # ── inveigh ────────────────────────────────────────────────────────────────
   inveigh:
     runs-on: windows-latest
     steps:
@@ -143,23 +157,31 @@ jobs:
           git clone https://github.com/Kevin-Robertson/Inveigh.git
           cd Inveigh
           $proj = Get-ChildItem -Recurse -Filter "*.csproj" | Select-Object -First 1
-          $framework = (Select-String -Path $proj.FullName -Pattern '<TargetFramework>(.+?)</TargetFramework>').Matches[0].Groups[1].Value
+          $projContent = Get-Content $proj.FullName -Raw
+          if ($projContent -match '<TargetFramework>(.+?)</TargetFramework>') {
+              $framework = $Matches[1]
+          } elseif ($projContent -match '<TargetFrameworks>(.+?)</TargetFrameworks>') {
+              $framework = $Matches[1].Split(';')[0]
+          } else {
+              $framework = "net462"
+          }
           Write-Host "Framework: $framework"
           dotnet restore $proj.FullName
           if ($framework -like "net4*") {
-            msbuild $proj.FullName /p:Configuration=Release /p:Platform="Any CPU" /m
-            $outDir = Join-Path $proj.DirectoryName "bin\Release"
-            Compress-Archive "$outDir\*.exe" ..\..\inveigh-windows.zip
+              msbuild $proj.FullName /p:Configuration=Release /p:Platform="AnyCPU" /m
+              $outDir = Get-ChildItem -Path $proj.DirectoryName -Recurse -Directory | Where-Object { $_.FullName -match "bin\\Release" } | Sort-Object FullName -Descending | Select-Object -First 1
+              Compress-Archive "$($outDir.FullName)\*.exe" ..\..\inveigh-windows.zip
           } else {
-            dotnet publish $proj.FullName -c Release -r win-x64 --self-contained true -o out\win
-            Compress-Archive out\win\* ..\..\inveigh-windows.zip
+              dotnet publish $proj.FullName -c Release -r win-x64 --self-contained true -o out\win
+              Compress-Archive out\win\* ..\..\inveigh-windows.zip
           }
       - uses: actions/upload-artifact@v4
         with:
           name: inveigh
-          path: "*.zip"
+          path: |
+            *.zip
 
-  # ── snaffler (Windows + MSBuild fallback) ────────────────────────────────────
+  # ── snaffler ───────────────────────────────────────────────────────────────
   snaffler:
     runs-on: windows-latest
     steps:
@@ -173,258 +195,48 @@ jobs:
         run: |
           git clone https://github.com/SnaffCon/Snaffler.git
           cd Snaffler
-          # Exclude test projects
-          $proj = Get-ChildItem -Recurse -Filter "*.csproj" | `
-                  Where-Object { $_.Name -notmatch "[Tt]est" } | `
-                  Select-Object -First 1
-          $framework = (Select-String -Path $proj.FullName -Pattern '<TargetFramework>(.+?)</TargetFramework>').Matches[0].Groups[1].Value
-          Write-Host "Framework: $framework  Project: $($proj.Name)"
+          $proj = Get-ChildItem -Recurse -Filter "*.csproj" | Where-Object { $_.Name -notmatch "[Tt]est" } | Select-Object -First 1
+          $projContent = Get-Content $proj.FullName -Raw
+          if ($projContent -match '<TargetFramework>(.+?)</TargetFramework>') {
+              $framework = $Matches[1]
+          } elseif ($projContent -match '<TargetFrameworks>(.+?)</TargetFrameworks>') {
+              $framework = $Matches[1].Split(';')[0]
+          } else {
+              $framework = "net462"
+          }
+          Write-Host "Framework: $framework"
           dotnet restore $proj.FullName
           if ($framework -like "net4*") {
-            msbuild $proj.FullName /p:Configuration=Release /p:Platform="Any CPU" /m
-            $outDir = Join-Path $proj.DirectoryName "bin\Release"
-            Compress-Archive "$outDir\*.exe" ..\..\snaffler-windows.zip
+              msbuild $proj.FullName /p:Configuration=Release /p:Platform="AnyCPU" /m
+              $outDir = Get-ChildItem -Path $proj.DirectoryName -Recurse -Directory | Where-Object { $_.FullName -match "bin\\Release" } | Sort-Object FullName -Descending | Select-Object -First 1
+              Compress-Archive "$($outDir.FullName)\*.exe" ..\..\snaffler-windows.zip
           } else {
-            dotnet publish $proj.FullName -c Release -r win-x64 --self-contained true -o out\win
-            Compress-Archive out\win\* ..\..\snaffler-windows.zip
+              dotnet publish $proj.FullName -c Release -r win-x64 --self-contained true -o out\win
+              Compress-Archive out\win\* ..\..\snaffler-windows.zip
           }
       - uses: actions/upload-artifact@v4
         with:
           name: snaffler
-          path: "*.zip"
+          path: |
+            *.zip
 
-  # ── netcat ──────────────────────────────────────────────────────────────────
-  netcat:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install & Package
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y netcat-traditional
-          cp /bin/nc netcat
-          zip netcat-linux-x86.zip netcat
-          wget -q https://eternallybored.org/misc/netcat/netcat-win32-1.12.zip
-          unzip -q netcat-win32-1.12.zip
-          zip netcat-windows-x86.zip nc.exe
-      - uses: actions/upload-artifact@v4
-        with:
-          name: netcat
-          path: "*.zip"
-
-  # ── nmap ────────────────────────────────────────────────────────────────────
-  nmap:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Linux build (native x86_64, no cross-compile)
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y build-essential libpcap-dev libssl-dev
-          wget -q https://nmap.org/dist/nmap-${{ env.NMAP_VERSION }}.tar.bz2
-          tar -xjf nmap-${{ env.NMAP_VERSION }}.tar.bz2
-          cd nmap-${{ env.NMAP_VERSION }}
-          ./configure
-          make -j$(nproc)
-          zip ../nmap-linux-x64.zip nmap
-      - name: Windows prebuilt
-        run: |
-          wget -q https://nmap.org/dist/nmap-${{ env.NMAP_VERSION }}-win32.zip -O nmap-win.zip
-          unzip -q nmap-win.zip
-          DIR=$(find . -maxdepth 1 -type d -name "nmap-*" | head -n 1)
-          zip nmap-windows-x86.zip "$DIR/nmap.exe" "$DIR/ncat.exe" || true
-      - uses: actions/upload-artifact@v4
-        with:
-          name: nmap
-          path: "*.zip"
-
-  # ── impacket ────────────────────────────────────────────────────────────────
-  impacket:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install & Package scripts
-        run: |
-          pip3 install impacket --break-system-packages 2>/dev/null || pip3 install impacket
-          mkdir impacket-tools
-          # pip installs scripts into one of these locations
-          for DIR in ~/.local/bin /usr/local/bin /usr/bin; do
-            for SCRIPT in GetUserSPNs GetNPUsers secretsdump psexec wmiexec \
-                          lookupsid ticketer raiseChild mssqlclient ntlmrelayx; do
-              SRC="$DIR/${SCRIPT}.py"
-              [ -f "$SRC" ] && cp "$SRC" impacket-tools/ && echo "copied $SRC"
-            done
-          done
-          zip -r impacket-tools.zip impacket-tools
-      - uses: actions/upload-artifact@v4
-        with:
-          name: impacket
-          path: impacket-tools.zip
-
-  # ── bloodhound-python ────────────────────────────────────────────────────────
-  bloodhound-python:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install & Package
-        run: |
-          pip3 install bloodhound --break-system-packages 2>/dev/null || pip3 install bloodhound
-          mkdir bh-tools
-          for DIR in ~/.local/bin /usr/local/bin /usr/bin; do
-            [ -f "$DIR/bloodhound-python" ] && cp "$DIR/bloodhound-python" bh-tools/ && break
-          done
-          zip -r bloodhound-python.zip bh-tools
-      - uses: actions/upload-artifact@v4
-        with:
-          name: bloodhound-python
-          path: bloodhound-python.zip
-
-  # ── crackmapexec / netexec ───────────────────────────────────────────────────
+  # ── crackmapexec / netexec ──────────────────────────────────────────────────
   crackmapexec:
     runs-on: ubuntu-latest
     steps:
       - name: Install NetExec & Package
         run: |
-          # Use pipx with explicit home so binary location is predictable
-          pip3 install pipx --break-system-packages 2>/dev/null || pip3 install pipx
+          python3 -m pip install --user pipx
+          python3 -m pipx ensurepath
+          export PATH=$HOME/.local/bin:$PATH
           pipx install netexec --force
           mkdir cme-tools
-          # pipx puts binaries in ~/.local/bin
-          for BIN in nxc netexec crackmapexec; do
-            [ -f "$HOME/.local/bin/$BIN" ] && cp "$HOME/.local/bin/$BIN" cme-tools/netexec && break
-          done
+          cp ~/.local/bin/netexec cme-tools/ || true
+          cp ~/.local/bin/nxc cme-tools/ || true
+          cp ~/.local/bin/crackmapexec cme-tools/ || true
           zip -r crackmapexec-linux.zip cme-tools
       - uses: actions/upload-artifact@v4
         with:
           name: crackmapexec
-          path: crackmapexec-linux.zip
-
-  # ── powerview ────────────────────────────────────────────────────────────────
-  powerview:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Fetch PowerView
-        run: |
-          wget -q https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/master/Recon/PowerView.ps1
-          zip powerview.zip PowerView.ps1
-      - uses: actions/upload-artifact@v4
-        with:
-          name: powerview
-          path: powerview.zip
-
-  # ── powersploit ──────────────────────────────────────────────────────────────
-  powersploit:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clone & Package
-        run: |
-          git clone https://github.com/PowerShellMafia/PowerSploit.git
-          zip -r powersploit.zip PowerSploit
-      - uses: actions/upload-artifact@v4
-        with:
-          name: powersploit
-          path: powersploit.zip
-
-  # ── lapstoolkit ──────────────────────────────────────────────────────────────
-  lapstoolkit:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clone & Package
-        run: |
-          git clone https://github.com/leoloobeek/LAPSToolkit.git
-          zip lapstoolkit.zip LAPSToolkit/LAPSToolkit.ps1
-      - uses: actions/upload-artifact@v4
-        with:
-          name: lapstoolkit
-          path: lapstoolkit.zip
-
-  # ── windapsearch ─────────────────────────────────────────────────────────────
-  windapsearch:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clone & Package
-        run: |
-          git clone https://github.com/ropnop/windapsearch.git
-          zip windapsearch.zip windapsearch/windapsearch.py windapsearch/requirements.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windapsearch
-          path: windapsearch.zip
-
-  # ── adidnsdump ───────────────────────────────────────────────────────────────
-  adidnsdump:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install & Package
-        run: |
-          pip3 install adidnsdump --break-system-packages 2>/dev/null || pip3 install adidnsdump
-          mkdir adidns-tools
-          for DIR in ~/.local/bin /usr/local/bin /usr/bin; do
-            [ -f "$DIR/adidnsdump" ] && cp "$DIR/adidnsdump" adidns-tools/ && break
-          done
-          zip adidnsdump.zip adidns-tools/adidnsdump
-      - uses: actions/upload-artifact@v4
-        with:
-          name: adidnsdump
-          path: adidnsdump.zip
-
-  # ── DomainPasswordSpray ──────────────────────────────────────────────────────
-  domainpasswordspray:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Fetch & Package
-        run: |
-          wget -q https://raw.githubusercontent.com/dafthack/DomainPasswordSpray/master/DomainPasswordSpray.ps1
-          zip domainpasswordspray.zip DomainPasswordSpray.ps1
-      - uses: actions/upload-artifact@v4
-        with:
-          name: domainpasswordspray
-          path: domainpasswordspray.zip
-
-  # ── PowerUpSQL ───────────────────────────────────────────────────────────────
-  powerupsql:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clone & Package
-        run: |
-          git clone https://github.com/NetSPI/PowerUpSQL.git
-          zip powerupsql.zip PowerUpSQL/PowerUpSQL.ps1
-      - uses: actions/upload-artifact@v4
-        with:
-          name: powerupsql
-          path: powerupsql.zip
-
-  # ── responder ─────────────────────────────────────────────────────────────────
-  responder:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clone & Package
-        run: |
-          git clone https://github.com/lgandx/Responder.git
-          zip -r responder.zip Responder
-      - uses: actions/upload-artifact@v4
-        with:
-          name: responder
-          path: responder.zip
-
-  # ── PKINITtools ──────────────────────────────────────────────────────────────
-  pkinittools:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clone & Package
-        run: |
-          git clone https://github.com/dirkjanm/PKINITtools.git
-          zip -r pkinittools.zip PKINITtools
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pkinittools
-          path: pkinittools.zip
-
-  # ── noPac ────────────────────────────────────────────────────────────────────
-  nopac:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clone & Package
-        run: |
-          git clone https://github.com/Ridter/noPac.git
-          zip -r nopac.zip noPac
-      - uses: actions/upload-artifact@v4
-        with:
-          name: nopac
-          path: nopac.zip
+          path: |
+            crackmapexec-linux.zip
