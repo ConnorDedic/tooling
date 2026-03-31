@@ -87,7 +87,7 @@ jobs:
         with:
           tag_name: nightly-linux-${{ matrix.arch }}
           files: nightly-linux-${{ matrix.arch }}.zip
-          overwrite: true   # ✅ prevents collisions
+          overwrite_files: true   # ✅ prevents collisions
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -167,6 +167,6 @@ jobs:
         with:
           tag_name: nightly-windows-${{ matrix.arch.goarch }}
           files: nightly-windows.zip
-          overwrite: true
+          overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
