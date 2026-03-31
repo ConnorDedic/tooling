@@ -8,6 +8,7 @@ on:
 
 env:
   TEMP_DIR: artifacts
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # forces Node.js 24 for all actions
 
 jobs:
   build-toolkit:
@@ -74,12 +75,10 @@ jobs:
       - name: Compile / Build tools
         shell: pwsh
         run: |
-          # Example: Compile Go binaries
           $goProjects = Get-ChildItem -Recurse -Include *.go
           foreach ($proj in $goProjects) {
               go build -o "$env:TEMP_DIR\$($proj.BaseName).exe" $proj.FullName
           }
-          # You can expand this section for .NET, C/C++ builds as needed
 
       - name: List downloaded and built artifacts
         run: Get-ChildItem $env:TEMP_DIR
