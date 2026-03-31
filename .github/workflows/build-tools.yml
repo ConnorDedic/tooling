@@ -4,13 +4,7 @@ on:
   schedule:
     - cron: "0 2 * * *"
   workflow_dispatch:
-    inputs:
-      reason:
-        description: "Reason for manual trigger"
-        required: false
-        default: "Manual trigger"
 
-# 🔥 REQUIRED — fixes "Resource not accessible by integration"
 permissions:
   contents: write
 
@@ -22,10 +16,9 @@ env:
 jobs:
 
 # =============================================================================
-# SCRIPT COLLECTION (unchanged)
+# COLLECT SCRIPTS
 # =============================================================================
   collect-scripts:
-    name: Collect Script-Based Tools
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,9 +28,6 @@ jobs:
       - run: curl -fsSL -o staging/scripts/PowerView.ps1 https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/master/Recon/PowerView.ps1
         continue-on-error: true
 
-      - run: git clone --depth 1 https://github.com/fox-it/BloodHound.py.git staging/scripts/BloodHound.py
-        continue-on-error: true
-
       - uses: actions/upload-artifact@v4
         with:
           name: scripts
@@ -45,41 +35,40 @@ jobs:
           retention-days: 1
 
 # =============================================================================
-# LINUX BUILD (only key fixes shown)
+# LINUX BUILD
 # =============================================================================
   build-linux:
     runs-on: ubuntu-latest
     needs: collect-scripts
     strategy:
+      fail-fast: false
       matrix:
         arch: [amd64, 386]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: false   # ✅ fixes go.sum warning
+          cache: false
 
       - uses: actions/download-artifact@v4
         with:
           name: scripts
           path: staging/scripts
 
-      - run: mkdir -p dist/binaries
+      - run: mkdir -p dist staging
 
       - name: Build kerbrute
         run: |
           git clone --depth 1 https://github.com/ropnop/kerbrute.git
           cd kerbrute
-          GOOS=linux GOARCH=${{ matrix.arch }} go build -o ../dist/binaries/kerbrute
+          GOOS=linux GOARCH=${{ matrix.arch }} go build -o ../dist/kerbrute
         continue-on-error: true
 
       - name: Package
         run: |
-          mkdir -p release
           zip -r nightly-linux-${{ matrix.arch }}.zip dist staging
 
       - name: Release
@@ -87,46 +76,55 @@ jobs:
         with:
           tag_name: nightly-linux-${{ matrix.arch }}
           files: nightly-linux-${{ matrix.arch }}.zip
-          overwrite_files: true   # ✅ prevents collisions
+          overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 # =============================================================================
-# WINDOWS BUILD (FIXED .NET)
+# WINDOWS BUILD (FIXED)
 # =============================================================================
   build-windows:
     runs-on: windows-latest
     needs: collect-scripts
+
     strategy:
+      fail-fast: false
       matrix:
         arch:
           - goarch: amd64
-            rid: win-x64
           - goarch: 386
-            rid: win-x86
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # 🔥 FIX: install .NET Framework targeting pack
+      - name: Install .NET Framework Dev Pack
+        shell: pwsh
+        run: choco install netfx-4.8-devpack -y
 
       - uses: actions/download-artifact@v4
         with:
           name: scripts
           path: staging/scripts
 
-      - run: mkdir dist
+      - name: Prepare dirs
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
 
-      # ✅ GO BUILD (unchanged)
+      # -----------------------------------------------------------------------------
+      # GO TOOL
+      # -----------------------------------------------------------------------------
       - name: Build chisel
         shell: pwsh
         run: |
@@ -136,37 +134,62 @@ jobs:
           $env:GOARCH="${{ matrix.arch.goarch }}"
           go build -o ../dist/chisel.exe
 
-      # 🔥 FIXED .NET BUILDS (NO SINGLE FILE)
+      # -----------------------------------------------------------------------------
+      # RUBEUS (FIXED)
+      # -----------------------------------------------------------------------------
       - name: Build Rubeus
         shell: pwsh
         run: |
           git clone https://github.com/GhostPack/Rubeus.git
-          cd Rubeus
-          dotnet restore
-          dotnet build -c Release
-          $exe = Get-ChildItem -Recurse -Filter Rubeus.exe | Select-Object -First 1
-          Copy-Item $exe.FullName ../dist/Rubeus.exe
+          cd Rubeus\Rubeus
 
+          msbuild Rubeus.csproj /p:Configuration=Release
+
+          $exe = Get-ChildItem -Recurse -Filter Rubeus.exe | Select-Object -First 1
+
+          if ($exe) {
+            Copy-Item $exe.FullName ../../dist/Rubeus.exe
+          } else {
+            Write-Error "Rubeus.exe not found"
+            exit 1
+          }
+
+      # -----------------------------------------------------------------------------
+      # SHARPHOUND (SAFE BUILD)
+      # -----------------------------------------------------------------------------
       - name: Build SharpHound
         shell: pwsh
         run: |
           git clone https://github.com/BloodHoundAD/SharpHound.git
           cd SharpHound
-          dotnet restore
-          dotnet build -c Release   # ✅ FIX
-          $exe = Get-ChildItem -Recurse -Filter *.exe | Select-Object -First 1
-          Copy-Item $exe.FullName ../dist/SharpHound.exe
 
+          dotnet build -c Release
+
+          $exe = Get-ChildItem -Recurse -Filter *.exe | Select-Object -First 1
+
+          if ($exe) {
+            Copy-Item $exe.FullName ../dist/SharpHound.exe
+          } else {
+            Write-Error "SharpHound.exe not found"
+            exit 1
+          }
+
+      # -----------------------------------------------------------------------------
+      # PACKAGE
+      # -----------------------------------------------------------------------------
       - name: Package
         shell: pwsh
         run: |
-          Compress-Archive -Path dist,staging -DestinationPath nightly-windows.zip
+          Compress-Archive -Path dist,staging -DestinationPath nightly-windows-${{ matrix.arch.goarch }}.zip
 
+      # -----------------------------------------------------------------------------
+      # RELEASE
+      # -----------------------------------------------------------------------------
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: nightly-windows-${{ matrix.arch.goarch }}
-          files: nightly-windows.zip
+          files: nightly-windows-${{ matrix.arch.goarch }}.zip
           overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
