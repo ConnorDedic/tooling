@@ -1,54 +1,29 @@
 # =============================================================================
 #  NIGHTLY PENTEST TOOLKIT — GitHub Actions Workflow
-#  
-#  Triggers: nightly cron (02:00 UTC) + manual workflow_dispatch
 #
-#  Produces 4 separate GitHub Releases, one per arch/OS:
-#    • nightly-linux-x64
-#    • nightly-linux-x86
-#    • nightly-windows-x64
-#    • nightly-windows-x86
+#  Triggers : nightly cron (02:00 UTC) + manual workflow_dispatch
 #
-#  ┌─────────────────────────────────────────────────────────────────────────┐
-#  │  TOOL INVENTORY                                                         │
-#  ├──────────────────────────┬──────────────┬─────────────────────────────-─┤
-#  │  Tool                    │  Type        │  Targets                      │
-#  ├──────────────────────────┼──────────────┼───────────────────────────────┤
-#  │  nmap                    │  C/C++       │  linux x86/x64, win x86/x64   │
-#  │  kerbrute                │  Go          │  linux x86/x64, win x86/x64   │
-#  │  ligolo-ng (proxy+agent) │  Go          │  linux x86/x64, win x86/x64   │
-#  │  chisel                  │  Go          │  linux x86/x64, win x86/x64   │
-#  │  SharpHound              │  C# (.NET)   │  windows x86/x64              │
-#  │  SharpView               │  C# (.NET)   │  windows x86/x64              │
-#  │  Rubeus                  │  C# (.NET)   │  windows x86/x64              │
-#  │  InveighZero             │  C# (.NET)   │  windows x86/x64              │
-#  │  Snaffler                │  C# (.NET)   │  windows x86/x64              │
-#  │  noPac                   │  C# (.NET)   │  windows x86/x64              │
-#  │  Mimikatz                │  C (MSVC)    │  windows x86/x64  (native)    │
-#  │  CrackMapExec            │  Python exe  │  linux x64, win x64           │
-#  ├──────────────────────────┼──────────────┼───────────────────────────────┤
-#  │  PowerView.ps1           │  script      │  all (no compile)             │
-#  │  Inveigh.ps1             │  script      │  all (no compile)             │
-#  │  DomainPasswordSpray.ps1 │  script      │  all (no compile)             │
-#  │  LAPSToolkit.ps1         │  script      │  all (no compile)             │
-#  │  BloodHound.py           │  script      │  all (no compile)             │
-#  │  windapsearch            │  script      │  all (no compile)             │
-#  │  adidnsdump              │  script      │  all (no compile)             │
-#  │  enum4linux-ng           │  script      │  all (no compile)             │
-#  │  gpp-decrypt             │  script      │  all (no compile)             │
-#  │  smbmap                  │  script      │  all (no compile)             │
-#  │  evil-winrm              │  script      │  all (no compile)             │
-#  │  PetitPotam              │  script      │  all (no compile)             │
-#  │  CVE-2021-1675           │  script      │  all (no compile)             │
-#  │  PKINITtools              │  script      │  all (no compile)             │
-#  │  Impacket scripts (all)  │  script      │  all (no compile)             │
-#  │  Responder               │  script      │  linux (no compile)           │
-#  └──────────────────────────┴──────────────┴───────────────────────────────┘
+#  Releases (one per arch/OS):
+#    nightly-linux-x64   nightly-linux-x86
+#    nightly-windows-x64 nightly-windows-x86
 #
-#  FAILURE POLICY:
-#    continue-on-error: true per tool. Failed tools are tracked in a
-#    build_report.txt that gets attached to every release. The release tag
-#    and body will list ⚠️ failures prominently so nothing is silently lost.
+#  COMPILED TOOLS (built from source)
+#    Cross-platform : nmap (C/C++), kerbrute (Go), ligolo-ng proxy+agent (Go),
+#                     chisel (Go)
+#    Windows-only   : SharpHound, SharpView, Rubeus, InveighZero, Snaffler,
+#                     noPac (all C#/.NET), Mimikatz (C/MSVC)
+#
+#  SCRIPT TOOLS (no compilation — cloned/downloaded as-is)
+#    PowerShell : PowerView, Inveigh.ps1, DomainPasswordSpray, LAPSToolkit
+#    Python     : BloodHound.py, windapsearch, adidnsdump, enum4linux-ng,
+#                 gpp-decrypt, smbmap, evil-winrm, PetitPotam,
+#                 CVE-2021-1675, PKINITtools, Responder,
+#                 all Impacket example scripts
+#
+#  FAILURE POLICY
+#    Every build step has continue-on-error: true.
+#    Failures are appended to build_report.md which is embedded in the
+#    release body and attached as a file — nothing fails silently.
 # =============================================================================
 
 name: Nightly Pentest Toolkit Build
@@ -66,12 +41,12 @@ on:
 env:
   GO_VERSION: "1.22"
   DOTNET_VERSION: "6.0.x"
-  PYTHON_VERSION: "3.11"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB: Collect scripts (no compilation — shared across all releases)
-# Runs once; output is uploaded as an artifact and reused by all release jobs.
-# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+
+# =============================================================================
+# JOB 1 — Collect all script-based tools (runs once, shared by all releases)
+# =============================================================================
   collect-scripts:
     name: Collect Script-Based Tools
     runs-on: ubuntu-latest
@@ -79,10 +54,10 @@ env:
       - name: Checkout this repo
         uses: actions/checkout@v4
 
-      - name: Create scripts staging directory
+      - name: Create staging directory
         run: mkdir -p staging/scripts
 
-      # ── PowerShell scripts ──────────────────────────────────────────────────
+      # ── PowerShell ──────────────────────────────────────────────────────────
       - name: "[PowerView] Download"
         continue-on-error: true
         run: |
@@ -107,72 +82,59 @@ env:
           curl -fsSL -o staging/scripts/LAPSToolkit.ps1 \
             "https://raw.githubusercontent.com/leoloobeek/LAPSToolkit/master/LAPSToolkit.ps1"
 
-      # ── Python tools ────────────────────────────────────────────────────────
+      # ── Python / misc ────────────────────────────────────────────────────────
       - name: "[BloodHound.py] Clone"
         continue-on-error: true
-        run: |
-          git clone --depth 1 https://github.com/fox-it/BloodHound.py.git staging/scripts/BloodHound.py
+        run: git clone --depth 1 https://github.com/fox-it/BloodHound.py.git staging/scripts/BloodHound.py
 
       - name: "[windapsearch] Clone"
         continue-on-error: true
-        run: |
-          git clone --depth 1 https://github.com/ropnop/windapsearch.git staging/scripts/windapsearch
+        run: git clone --depth 1 https://github.com/ropnop/windapsearch.git staging/scripts/windapsearch
 
       - name: "[adidnsdump] Clone"
         continue-on-error: true
-        run: |
-          git clone --depth 1 https://github.com/dirkjanm/adidnsdump.git staging/scripts/adidnsdump
+        run: git clone --depth 1 https://github.com/dirkjanm/adidnsdump.git staging/scripts/adidnsdump
 
       - name: "[enum4linux-ng] Clone"
         continue-on-error: true
-        run: |
-          git clone --depth 1 https://github.com/cddmp/enum4linux-ng.git staging/scripts/enum4linux-ng
+        run: git clone --depth 1 https://github.com/cddmp/enum4linux-ng.git staging/scripts/enum4linux-ng
 
       - name: "[gpp-decrypt] Clone"
         continue-on-error: true
-        run: |
-          git clone --depth 1 https://github.com/t0thkr1s/gpp-decrypt.git staging/scripts/gpp-decrypt
+        run: git clone --depth 1 https://github.com/t0thkr1s/gpp-decrypt.git staging/scripts/gpp-decrypt
 
       - name: "[smbmap] Clone"
         continue-on-error: true
-        run: |
-          git clone --depth 1 https://github.com/ShawnDEvans/smbmap.git staging/scripts/smbmap
+        run: git clone --depth 1 https://github.com/ShawnDEvans/smbmap.git staging/scripts/smbmap
 
       - name: "[evil-winrm] Clone"
         continue-on-error: true
-        run: |
-          git clone --depth 1 https://github.com/Hackplayers/evil-winrm.git staging/scripts/evil-winrm
+        run: git clone --depth 1 https://github.com/Hackplayers/evil-winrm.git staging/scripts/evil-winrm
 
       - name: "[PetitPotam] Clone"
         continue-on-error: true
-        run: |
-          git clone --depth 1 https://github.com/topotam/PetitPotam.git staging/scripts/PetitPotam
+        run: git clone --depth 1 https://github.com/topotam/PetitPotam.git staging/scripts/PetitPotam
 
       - name: "[CVE-2021-1675] Clone"
         continue-on-error: true
-        run: |
-          git clone --depth 1 https://github.com/cube0x0/CVE-2021-1675.git staging/scripts/CVE-2021-1675
+        run: git clone --depth 1 https://github.com/cube0x0/CVE-2021-1675.git staging/scripts/CVE-2021-1675
 
       - name: "[PKINITtools] Clone"
         continue-on-error: true
-        run: |
-          git clone --depth 1 https://github.com/dirkjanm/PKINITtools.git staging/scripts/PKINITtools
+        run: git clone --depth 1 https://github.com/dirkjanm/PKINITtools.git staging/scripts/PKINITtools
 
       - name: "[Responder] Clone"
         continue-on-error: true
-        run: |
-          git clone --depth 1 https://github.com/lgandx/Responder.git staging/scripts/Responder
+        run: git clone --depth 1 https://github.com/lgandx/Responder.git staging/scripts/Responder
 
-      # ── Impacket example scripts ────────────────────────────────────────────
       - name: "[Impacket] Clone and extract examples"
         continue-on-error: true
         run: |
           git clone --depth 1 https://github.com/SecureAuthCorp/impacket.git /tmp/impacket
           mkdir -p staging/scripts/impacket
-          cp -r /tmp/impacket/examples/* staging/scripts/impacket/ 2>/dev/null || true
-          cp -r /tmp/impacket/impacket  staging/scripts/impacket/lib 2>/dev/null || true
-          # Also drop a requirements.txt for easy install
-          cp /tmp/impacket/requirements.txt staging/scripts/impacket/ 2>/dev/null || true
+          cp -r /tmp/impacket/examples/*      staging/scripts/impacket/ 2>/dev/null || true
+          cp -r /tmp/impacket/impacket        staging/scripts/impacket/lib 2>/dev/null || true
+          cp    /tmp/impacket/requirements.txt staging/scripts/impacket/ 2>/dev/null || true
 
       - name: Upload scripts artifact
         uses: actions/upload-artifact@v4
@@ -181,9 +143,9 @@ env:
           path: staging/scripts/
           retention-days: 1
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB: Build Linux binaries (x64 + x86 in matrix)
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
+# JOB 2 — Build Linux binaries (matrix: x64 / x86)
+# =============================================================================
   build-linux:
     name: Build Linux ${{ matrix.arch }}
     runs-on: ubuntu-latest
@@ -225,15 +187,10 @@ env:
             libpcap-dev \
             autoconf automake libtool \
             zip curl git
-
-          # Install 32-bit dev libs when building x86
           if [ "${{ matrix.arch }}" = "x86" ]; then
             sudo dpkg --add-architecture i386
             sudo apt-get update -qq
-            sudo apt-get install -y \
-              libssl-dev:i386 \
-              libpcap-dev:i386 \
-              gcc-multilib g++-multilib
+            sudo apt-get install -y libssl-dev:i386 libpcap-dev:i386
           fi
 
       - name: Download scripts artifact
@@ -242,20 +199,18 @@ env:
           name: scripts
           path: staging/scripts
 
-      - name: Prepare output and failure-tracking
+      - name: Prepare output dirs and build report
         run: |
           mkdir -p dist/binaries
-          echo "# Build Report — ${{ matrix.release_name }}" > dist/build_report.md
-          echo "Generated: $(date -u '+%Y-%m-%d %H:%M UTC')" >> dist/build_report.md
-          echo "" >> dist/build_report.md
-          echo "## ✅ Successful Builds" >> dist/build_report.md
-          echo "## ⚠️ Failed Builds" >> dist/build_report.md
+          cat > dist/build_report.md << 'REPORT'
+          # Build Report
+          REPORT
+          printf "# Build Report — ${{ matrix.release_name }}\n" > dist/build_report.md
+          printf "Generated: %s\n\n" "$(date -u '+%Y-%m-%d %H:%M UTC')" >> dist/build_report.md
+          printf "## ✅ Successful Builds\n\n" >> dist/build_report.md
+          printf "## ⚠️ Failed Builds\n" >> dist/build_report.md
 
-      # ── Go helper (used by kerbrute, ligolo-ng, chisel) ────────────────────
-      # Sets GOARCH + GOOS then runs 'go build' at a given path.
-      # Called via a local shell function defined inline.
-
-      # ── COMPILED: nmap ──────────────────────────────────────────────────────
+      # ── nmap ─────────────────────────────────────────────────────────────────
       - name: "[nmap] Clone"
         run: git clone --depth 1 https://github.com/nmap/nmap.git /tmp/nmap_src
 
@@ -264,27 +219,22 @@ env:
         continue-on-error: true
         run: |
           cd /tmp/nmap_src
-          export CFLAGS="${{ matrix.cc_flags }}"
-          export CXXFLAGS="${{ matrix.cc_flags }}"
-          export LDFLAGS="${{ matrix.cc_flags }}"
+          export CFLAGS="${{ matrix.cc_flags }}" CXXFLAGS="${{ matrix.cc_flags }}" LDFLAGS="${{ matrix.cc_flags }}"
           ./configure ${{ matrix.configure_host }} \
-            --without-zenmap \
-            --without-nmap-update \
-            --with-openssl \
-            --with-libpcap \
-            2>&1 | tail -20
-          make -j$(nproc) 2>&1 | tail -30
-          cp nmap $GITHUB_WORKSPACE/dist/binaries/nmap
+            --without-zenmap --without-nmap-update \
+            --with-openssl --with-libpcap
+          make -j$(nproc)
+          cp nmap "$GITHUB_WORKSPACE/dist/binaries/nmap"
 
-      - name: "[nmap] Log result"
+      - name: "[nmap] Log"
         run: |
           if [ "${{ steps.nmap.outcome }}" = "success" ]; then
-            sed -i "s/## ✅ Successful Builds/## ✅ Successful Builds\n- nmap/" dist/build_report.md
+            sed -i "s|## ✅ Successful Builds|## ✅ Successful Builds\n- nmap|" dist/build_report.md
           else
-            sed -i "s/## ⚠️ Failed Builds/## ⚠️ Failed Builds\n- **nmap** — compile failed (check logs)/" dist/build_report.md
+            sed -i "s|## ⚠️ Failed Builds|## ⚠️ Failed Builds\n- **nmap** — compile failed (check logs)|" dist/build_report.md
           fi
 
-      # ── COMPILED: kerbrute ──────────────────────────────────────────────────
+      # ── kerbrute ─────────────────────────────────────────────────────────────
       - name: "[kerbrute] Clone"
         run: git clone --depth 1 https://github.com/ropnop/kerbrute.git /tmp/kerbrute_src
 
@@ -294,17 +244,17 @@ env:
         run: |
           cd /tmp/kerbrute_src
           GOOS=linux GOARCH=${{ matrix.goarch }} \
-            go build -ldflags="-s -w" -o $GITHUB_WORKSPACE/dist/binaries/kerbrute .
+            go build -ldflags="-s -w" -o "$GITHUB_WORKSPACE/dist/binaries/kerbrute" .
 
-      - name: "[kerbrute] Log result"
+      - name: "[kerbrute] Log"
         run: |
           if [ "${{ steps.kerbrute.outcome }}" = "success" ]; then
-            sed -i "s/## ✅ Successful Builds/## ✅ Successful Builds\n- kerbrute/" dist/build_report.md
+            sed -i "s|## ✅ Successful Builds|## ✅ Successful Builds\n- kerbrute|" dist/build_report.md
           else
-            sed -i "s/## ⚠️ Failed Builds/## ⚠️ Failed Builds\n- **kerbrute** — compile failed (check logs)/" dist/build_report.md
+            sed -i "s|## ⚠️ Failed Builds|## ⚠️ Failed Builds\n- **kerbrute** — Go build failed (check logs)|" dist/build_report.md
           fi
 
-      # ── COMPILED: ligolo-ng (proxy + agent) ────────────────────────────────
+      # ── ligolo-ng ─────────────────────────────────────────────────────────────
       - name: "[ligolo-ng] Clone"
         run: git clone --depth 1 https://github.com/nicocha30/ligolo-ng.git /tmp/ligolo_src
 
@@ -315,15 +265,14 @@ env:
           cd /tmp/ligolo_src
           GOOS=linux GOARCH=${{ matrix.goarch }} \
             go build -ldflags="-s -w" \
-            -o $GITHUB_WORKSPACE/dist/binaries/ligolo-proxy \
-            ./cmd/proxy
+            -o "$GITHUB_WORKSPACE/dist/binaries/ligolo-proxy" ./cmd/proxy
 
-      - name: "[ligolo-ng proxy] Log result"
+      - name: "[ligolo-ng proxy] Log"
         run: |
           if [ "${{ steps.ligolo_proxy.outcome }}" = "success" ]; then
-            sed -i "s/## ✅ Successful Builds/## ✅ Successful Builds\n- ligolo-ng (proxy)/" dist/build_report.md
+            sed -i "s|## ✅ Successful Builds|## ✅ Successful Builds\n- ligolo-ng (proxy)|" dist/build_report.md
           else
-            sed -i "s/## ⚠️ Failed Builds/## ⚠️ Failed Builds\n- **ligolo-ng proxy** — compile failed (check logs)/" dist/build_report.md
+            sed -i "s|## ⚠️ Failed Builds|## ⚠️ Failed Builds\n- **ligolo-ng proxy** — Go build failed (check logs)|" dist/build_report.md
           fi
 
       - name: "[ligolo-ng agent] Build"
@@ -333,18 +282,17 @@ env:
           cd /tmp/ligolo_src
           GOOS=linux GOARCH=${{ matrix.goarch }} \
             go build -ldflags="-s -w" \
-            -o $GITHUB_WORKSPACE/dist/binaries/ligolo-agent \
-            ./cmd/agent
+            -o "$GITHUB_WORKSPACE/dist/binaries/ligolo-agent" ./cmd/agent
 
-      - name: "[ligolo-ng agent] Log result"
+      - name: "[ligolo-ng agent] Log"
         run: |
           if [ "${{ steps.ligolo_agent.outcome }}" = "success" ]; then
-            sed -i "s/## ✅ Successful Builds/## ✅ Successful Builds\n- ligolo-ng (agent)/" dist/build_report.md
+            sed -i "s|## ✅ Successful Builds|## ✅ Successful Builds\n- ligolo-ng (agent)|" dist/build_report.md
           else
-            sed -i "s/## ⚠️ Failed Builds/## ⚠️ Failed Builds\n- **ligolo-ng agent** — compile failed (check logs)/" dist/build_report.md
+            sed -i "s|## ⚠️ Failed Builds|## ⚠️ Failed Builds\n- **ligolo-ng agent** — Go build failed (check logs)|" dist/build_report.md
           fi
 
-      # ── COMPILED: chisel ────────────────────────────────────────────────────
+      # ── chisel ───────────────────────────────────────────────────────────────
       - name: "[chisel] Clone"
         run: git clone --depth 1 https://github.com/jpillora/chisel.git /tmp/chisel_src
 
@@ -355,65 +303,68 @@ env:
           cd /tmp/chisel_src
           GOOS=linux GOARCH=${{ matrix.goarch }} \
             go build -ldflags="-s -w" \
-            -o $GITHUB_WORKSPACE/dist/binaries/chisel .
+            -o "$GITHUB_WORKSPACE/dist/binaries/chisel" .
 
-      - name: "[chisel] Log result"
+      - name: "[chisel] Log"
         run: |
           if [ "${{ steps.chisel.outcome }}" = "success" ]; then
-            sed -i "s/## ✅ Successful Builds/## ✅ Successful Builds\n- chisel/" dist/build_report.md
+            sed -i "s|## ✅ Successful Builds|## ✅ Successful Builds\n- chisel|" dist/build_report.md
           else
-            sed -i "s/## ⚠️ Failed Builds/## ⚠️ Failed Builds\n- **chisel** — compile failed (check logs)/" dist/build_report.md
+            sed -i "s|## ⚠️ Failed Builds|## ⚠️ Failed Builds\n- **chisel** — Go build failed (check logs)|" dist/build_report.md
           fi
 
-      # ── Package everything ──────────────────────────────────────────────────
+      # ── Strip, package, release ──────────────────────────────────────────────
       - name: Strip binaries
         run: |
-          find dist/binaries -type f -executable | while read bin; do
+          find dist/binaries -maxdepth 1 -type f | while read bin; do
             strip "$bin" 2>/dev/null || true
           done
 
       - name: Assemble release archive
         run: |
           TAG="${{ matrix.release_tag }}"
-          mkdir -p "release/${TAG}"
-          cp -r dist/binaries/* "release/${TAG}/" 2>/dev/null || true
-          cp -r staging/scripts    "release/${TAG}/scripts"
-          cp dist/build_report.md  "release/${TAG}/build_report.md"
+          mkdir -p "release/${TAG}/binaries"
+          cp -r dist/binaries/* "release/${TAG}/binaries/" 2>/dev/null || true
+          cp -r staging/scripts "release/${TAG}/scripts"
+          cp dist/build_report.md "release/${TAG}/build_report.md"
           cd release
           zip -r "../${TAG}.zip" "${TAG}/"
 
-      - name: Upload build report
+      - name: Upload build report artifact
         uses: actions/upload-artifact@v4
         with:
           name: build-report-${{ matrix.release_tag }}
           path: dist/build_report.md
+          retention-days: 7
 
-      # ── Release ─────────────────────────────────────────────────────────────
       - name: Read build report for release body
         id: report
-        run: echo "body<<EOF" >> $GITHUB_OUTPUT
-             cat dist/build_report.md >> $GITHUB_OUTPUT
-             echo "EOF" >> $GITHUB_OUTPUT
+        run: |
+          {
+            echo "body<<EOF"
+            cat dist/build_report.md
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Create / update release
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ matrix.release_tag }}
           name: "${{ matrix.release_name }} — $(date -u '+%Y-%m-%d')"
           body: ${{ steps.report.outputs.body }}
-          prerelease: false
           files: |
             ${{ matrix.release_tag }}.zip
             dist/build_report.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB: Build Windows binaries (x64 + x86 in matrix)
-# Strategy: try native windows-latest runner first for C# and Mimikatz.
-#           Go tools (kerbrute, ligolo-ng, chisel) cross-compiled from Linux.
-#           nmap Windows built with MSVC via windows-latest runner.
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
+# JOB 3 — Build Windows binaries (matrix: x64 / x86)
+#   Go tools : built natively on windows-latest (GOOS=windows)
+#   C# tools : dotnet build / dotnet publish
+#   Mimikatz : MSBuild (MSVC)
+#   nmap     : MSBuild (MSVC) — failure noted with fallback instructions
+# =============================================================================
   build-windows:
     name: Build Windows ${{ matrix.arch }}
     runs-on: windows-latest
@@ -450,44 +401,34 @@ env:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
       - name: Download scripts artifact
         uses: actions/download-artifact@v4
         with:
           name: scripts
           path: staging/scripts
 
-      - name: Prepare output dirs and failure log
+      - name: Prepare output dirs and build report
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist\binaries | Out-Null
-          @"
-          # Build Report — ${{ matrix.release_name }}
-          Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm UTC')
+          $date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm UTC")
+          Set-Content dist\build_report.md -Encoding UTF8 -Value "# Build Report - ${{ matrix.release_name }}"
+          Add-Content dist\build_report.md -Encoding UTF8 -Value "Generated: $date"
+          Add-Content dist\build_report.md -Encoding UTF8 -Value ""
+          Add-Content dist\build_report.md -Encoding UTF8 -Value "## Successful Builds"
+          Add-Content dist\build_report.md -Encoding UTF8 -Value ""
+          Add-Content dist\build_report.md -Encoding UTF8 -Value "## Failed Builds"
 
-          ## ✅ Successful Builds
-          ## ⚠️ Failed Builds
-          "@ | Set-Content dist\build_report.md
-
-      # ── HELPER: PowerShell function to append pass/fail to report ──────────
-      # Defined here, referenced by name in each Log result step below.
-      - name: Define report helper
+      - name: Write report helpers script
         shell: pwsh
         run: |
-          # Write helper functions to a shared script loaded by later steps
-          @'
-          function Log-Success { param($tool)
-            $content = Get-Content dist\build_report.md
-            $content = $content -replace "## ✅ Successful Builds", "## ✅ Successful Builds`n- $tool"
-            $content | Set-Content dist\build_report.md
-          }
-          function Log-Failure { param($tool, $reason)
-            $content = Get-Content dist\build_report.md
-            $content = $content -replace "## ⚠️ Failed Builds", "## ⚠️ Failed Builds`n- **$tool** — $reason"
-            $content | Set-Content dist\build_report.md
-          }
-          '@ | Set-Content dist\report_helpers.ps1
+          Set-Content dist\helpers.ps1 -Encoding UTF8 -Value "function Log-Success { param([string]`$tool); `$c = Get-Content dist\build_report.md -Raw -Encoding UTF8; `$c = `$c -replace '## Successful Builds', ('## Successful Builds' + [char]10 + '- ' + `$tool); `$c | Set-Content dist\build_report.md -Encoding UTF8 }"
+          Add-Content dist\helpers.ps1 -Encoding UTF8 -Value "function Log-Failure { param([string]`$tool, [string]`$reason); `$c = Get-Content dist\build_report.md -Raw -Encoding UTF8; `$c = `$c -replace '## Failed Builds', ('## Failed Builds' + [char]10 + '- ' + `$tool + ' -- ' + `$reason); `$c | Set-Content dist\build_report.md -Encoding UTF8 }"
 
-      # ── COMPILED: kerbrute (Go — cross-compiles cleanly) ───────────────────
+      # ── kerbrute (Go) ─────────────────────────────────────────────────────────
       - name: "[kerbrute] Clone"
         run: git clone --depth 1 https://github.com/ropnop/kerbrute.git C:\src\kerbrute
 
@@ -501,14 +442,14 @@ env:
           $env:GOARCH = "${{ matrix.goarch }}"
           go build -ldflags="-s -w" -o "$env:GITHUB_WORKSPACE\dist\binaries\kerbrute.exe" .
 
-      - name: "[kerbrute] Log result"
+      - name: "[kerbrute] Log"
         shell: pwsh
         run: |
-          . dist\report_helpers.ps1
+          . dist\helpers.ps1
           if ("${{ steps.kerbrute_win.outcome }}" -eq "success") { Log-Success "kerbrute" }
-          else { Log-Failure "kerbrute" "Go build failed — check logs" }
+          else { Log-Failure "kerbrute" "Go build failed -- check logs" }
 
-      # ── COMPILED: ligolo-ng proxy (Go) ──────────────────────────────────────
+      # ── ligolo-ng (Go) ────────────────────────────────────────────────────────
       - name: "[ligolo-ng] Clone"
         run: git clone --depth 1 https://github.com/nicocha30/ligolo-ng.git C:\src\ligolo
 
@@ -520,18 +461,15 @@ env:
           cd C:\src\ligolo
           $env:GOOS = "windows"
           $env:GOARCH = "${{ matrix.goarch }}"
-          go build -ldflags="-s -w" `
-            -o "$env:GITHUB_WORKSPACE\dist\binaries\ligolo-proxy.exe" `
-            .\cmd\proxy
+          go build -ldflags="-s -w" -o "$env:GITHUB_WORKSPACE\dist\binaries\ligolo-proxy.exe" .\cmd\proxy
 
-      - name: "[ligolo-ng proxy] Log result"
+      - name: "[ligolo-ng proxy] Log"
         shell: pwsh
         run: |
-          . dist\report_helpers.ps1
+          . dist\helpers.ps1
           if ("${{ steps.ligolo_proxy_win.outcome }}" -eq "success") { Log-Success "ligolo-ng (proxy)" }
-          else { Log-Failure "ligolo-ng proxy" "Go build failed — check logs" }
+          else { Log-Failure "ligolo-ng proxy" "Go build failed -- check logs" }
 
-      # ── COMPILED: ligolo-ng agent (Go) ─────────────────────────────────────
       - name: "[ligolo-ng agent] Build"
         id: ligolo_agent_win
         continue-on-error: true
@@ -540,18 +478,16 @@ env:
           cd C:\src\ligolo
           $env:GOOS = "windows"
           $env:GOARCH = "${{ matrix.goarch }}"
-          go build -ldflags="-s -w" `
-            -o "$env:GITHUB_WORKSPACE\dist\binaries\ligolo-agent.exe" `
-            .\cmd\agent
+          go build -ldflags="-s -w" -o "$env:GITHUB_WORKSPACE\dist\binaries\ligolo-agent.exe" .\cmd\agent
 
-      - name: "[ligolo-ng agent] Log result"
+      - name: "[ligolo-ng agent] Log"
         shell: pwsh
         run: |
-          . dist\report_helpers.ps1
+          . dist\helpers.ps1
           if ("${{ steps.ligolo_agent_win.outcome }}" -eq "success") { Log-Success "ligolo-ng (agent)" }
-          else { Log-Failure "ligolo-ng agent" "Go build failed — check logs" }
+          else { Log-Failure "ligolo-ng agent" "Go build failed -- check logs" }
 
-      # ── COMPILED: chisel (Go) ───────────────────────────────────────────────
+      # ── chisel (Go) ───────────────────────────────────────────────────────────
       - name: "[chisel] Clone"
         run: git clone --depth 1 https://github.com/jpillora/chisel.git C:\src\chisel
 
@@ -563,70 +499,40 @@ env:
           cd C:\src\chisel
           $env:GOOS = "windows"
           $env:GOARCH = "${{ matrix.goarch }}"
-          go build -ldflags="-s -w" `
-            -o "$env:GITHUB_WORKSPACE\dist\binaries\chisel.exe" .
+          go build -ldflags="-s -w" -o "$env:GITHUB_WORKSPACE\dist\binaries\chisel.exe" .
 
-      - name: "[chisel] Log result"
+      - name: "[chisel] Log"
         shell: pwsh
         run: |
-          . dist\report_helpers.ps1
+          . dist\helpers.ps1
           if ("${{ steps.chisel_win.outcome }}" -eq "success") { Log-Success "chisel" }
-          else { Log-Failure "chisel" "Go build failed — check logs" }
+          else { Log-Failure "chisel" "Go build failed -- check logs" }
 
-      # ── COMPILED: nmap (Windows — MSVC via choco) ───────────────────────────
-      - name: "[nmap] Install build deps (choco)"
-        continue-on-error: true
-        run: choco install -y visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools"
-
+      # ── nmap (MSVC / MSBuild) ─────────────────────────────────────────────────
       - name: "[nmap] Clone"
         run: git clone --depth 1 https://github.com/nmap/nmap.git C:\src\nmap
 
-      - name: "[nmap] Build via MSBuild"
+      - name: "[nmap] Build"
         id: nmap_win
         continue-on-error: true
         shell: pwsh
         run: |
-          # nmap ships a Visual Studio solution under mswin32/
-          $slnPath = "C:\src\nmap\mswin32\nmap.sln"
-          if (Test-Path $slnPath) {
-            $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
-              -latest -requires Microsoft.Component.MSBuild `
-              -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1
-            if ($msbuild) {
-              & "$msbuild" $slnPath `
-                /p:Configuration=Release `
-                /p:Platform=${{ matrix.msbuild_platform }} `
-                /m
-              $outExe = "C:\src\nmap\mswin32\${{ matrix.msbuild_platform }}\Release\nmap.exe"
-              if (Test-Path $outExe) {
-                Copy-Item $outExe "$env:GITHUB_WORKSPACE\dist\binaries\nmap.exe"
-              } else {
-                # Try alternate output path
-                $alt = Get-ChildItem "C:\src\nmap" -Recurse -Filter "nmap.exe" | Select-Object -First 1
-                if ($alt) { Copy-Item $alt.FullName "$env:GITHUB_WORKSPACE\dist\binaries\nmap.exe" }
-                else { exit 1 }
-              }
-            } else { exit 1 }
-          } else { exit 1 }
+          $sln = "C:\src\nmap\mswin32\nmap.sln"
+          if (-not (Test-Path $sln)) { exit 1 }
+          msbuild $sln /p:Configuration=Release /p:Platform=${{ matrix.msbuild_platform }} /m
+          $exe = Get-ChildItem "C:\src\nmap" -Recurse -Filter "nmap.exe" |
+                 Where-Object { $_.FullName -match "Release" } | Select-Object -First 1
+          if ($exe) { Copy-Item $exe.FullName "$env:GITHUB_WORKSPACE\dist\binaries\nmap.exe" }
+          else { exit 1 }
 
-      - name: "[nmap] Fallback — cross-compile via mingw on ubuntu (if native failed)"
-        # This step only runs if the native Windows build failed.
-        # We trigger a secondary Linux runner via artifact + a re-usable action
-        # is not possible within the same job, so we note the failure and
-        # recommend the user add a separate cross-compile job if needed.
-        if: steps.nmap_win.outcome == 'failure'
+      - name: "[nmap] Log"
         shell: pwsh
         run: |
-          Write-Warning "nmap native Windows build failed. A pre-built nmap for Windows can be downloaded from https://nmap.org/download.html — consider adding a cross-compile step with mingw-w64 on a Linux runner."
-
-      - name: "[nmap] Log result"
-        shell: pwsh
-        run: |
-          . dist\report_helpers.ps1
+          . dist\helpers.ps1
           if ("${{ steps.nmap_win.outcome }}" -eq "success") { Log-Success "nmap" }
-          else { Log-Failure "nmap" "MSVC build failed — check logs; see fallback note in build output" }
+          else { Log-Failure "nmap" "MSVC/MSBuild failed -- pre-built binaries at https://nmap.org/download.html" }
 
-      # ── COMPILED: SharpHound (.NET / C#) ────────────────────────────────────
+      # ── SharpHound (C#) ───────────────────────────────────────────────────────
       - name: "[SharpHound] Clone"
         run: git clone --depth 1 https://github.com/BloodHoundAD/SharpHound.git C:\src\SharpHound
 
@@ -638,22 +544,22 @@ env:
           cd C:\src\SharpHound
           dotnet restore
           dotnet publish -c Release -r ${{ matrix.dotnet_rid }} `
-            --self-contained true `
-            -p:PublishSingleFile=true `
-            -o "$env:GITHUB_WORKSPACE\dist\binaries\SharpHound"
-          # Flatten — grab only the .exe
-          Get-ChildItem "$env:GITHUB_WORKSPACE\dist\binaries\SharpHound" -Filter "*.exe" |
-            Copy-Item -Destination "$env:GITHUB_WORKSPACE\dist\binaries\SharpHound.exe"
-          Remove-Item "$env:GITHUB_WORKSPACE\dist\binaries\SharpHound" -Recurse -Force
+            --self-contained true -p:PublishSingleFile=true `
+            -o "$env:GITHUB_WORKSPACE\dist\binaries\sh_out"
+          $exe = Get-ChildItem "$env:GITHUB_WORKSPACE\dist\binaries\sh_out" -Filter "*.exe" | Select-Object -First 1
+          if ($exe) {
+            Copy-Item $exe.FullName "$env:GITHUB_WORKSPACE\dist\binaries\SharpHound.exe"
+            Remove-Item "$env:GITHUB_WORKSPACE\dist\binaries\sh_out" -Recurse -Force
+          } else { exit 1 }
 
-      - name: "[SharpHound] Log result"
+      - name: "[SharpHound] Log"
         shell: pwsh
         run: |
-          . dist\report_helpers.ps1
+          . dist\helpers.ps1
           if ("${{ steps.sharphound.outcome }}" -eq "success") { Log-Success "SharpHound" }
-          else { Log-Failure "SharpHound" "dotnet publish failed — check logs" }
+          else { Log-Failure "SharpHound" "dotnet publish failed -- check logs" }
 
-      # ── COMPILED: SharpView (.NET / C#) ────────────────────────────────────
+      # ── SharpView (C#) ────────────────────────────────────────────────────────
       - name: "[SharpView] Clone"
         run: git clone --depth 1 https://github.com/dmchell/SharpView.git C:\src\SharpView
 
@@ -663,27 +569,21 @@ env:
         shell: pwsh
         run: |
           cd C:\src\SharpView
-          # SharpView uses old-style csproj — try MSBuild first, then dotnet
-          dotnet restore 2>$null
-          dotnet build -c Release /p:Platform=${{ matrix.msbuild_platform }} `
-            -o "$env:GITHUB_WORKSPACE\dist\binaries\" 2>&1
-          if (-not (Test-Path "$env:GITHUB_WORKSPACE\dist\binaries\SharpView.exe")) {
-            # Try finding the output anywhere in the tree
-            $found = Get-ChildItem C:\src\SharpView -Recurse -Filter "SharpView.exe" |
-                     Where-Object { $_.FullName -match "Release" } |
-                     Select-Object -First 1
-            if ($found) { Copy-Item $found.FullName "$env:GITHUB_WORKSPACE\dist\binaries\SharpView.exe" }
-            else { exit 1 }
-          }
+          dotnet restore
+          dotnet build -c Release
+          $exe = Get-ChildItem C:\src\SharpView -Recurse -Filter "SharpView.exe" |
+                 Where-Object { $_.FullName -match "Release" } | Select-Object -First 1
+          if ($exe) { Copy-Item $exe.FullName "$env:GITHUB_WORKSPACE\dist\binaries\SharpView.exe" }
+          else { exit 1 }
 
-      - name: "[SharpView] Log result"
+      - name: "[SharpView] Log"
         shell: pwsh
         run: |
-          . dist\report_helpers.ps1
+          . dist\helpers.ps1
           if ("${{ steps.sharpview.outcome }}" -eq "success") { Log-Success "SharpView" }
-          else { Log-Failure "SharpView" "dotnet build failed — check logs" }
+          else { Log-Failure "SharpView" "dotnet build failed -- check logs" }
 
-      # ── COMPILED: Rubeus (.NET / C#) ────────────────────────────────────────
+      # ── Rubeus (C#) ───────────────────────────────────────────────────────────
       - name: "[Rubeus] Clone"
         run: git clone --depth 1 https://github.com/GhostPack/Rubeus.git C:\src\Rubeus
 
@@ -694,20 +594,20 @@ env:
         run: |
           cd C:\src\Rubeus
           dotnet restore
-          dotnet build -c Release /p:Platform=${{ matrix.msbuild_platform }}
+          dotnet build -c Release
           $exe = Get-ChildItem C:\src\Rubeus -Recurse -Filter "Rubeus.exe" |
                  Where-Object { $_.FullName -match "Release" } | Select-Object -First 1
           if ($exe) { Copy-Item $exe.FullName "$env:GITHUB_WORKSPACE\dist\binaries\Rubeus.exe" }
           else { exit 1 }
 
-      - name: "[Rubeus] Log result"
+      - name: "[Rubeus] Log"
         shell: pwsh
         run: |
-          . dist\report_helpers.ps1
+          . dist\helpers.ps1
           if ("${{ steps.rubeus.outcome }}" -eq "success") { Log-Success "Rubeus" }
-          else { Log-Failure "Rubeus" "dotnet build failed — check logs" }
+          else { Log-Failure "Rubeus" "dotnet build failed -- check logs" }
 
-      # ── COMPILED: InveighZero (.NET / C#) ───────────────────────────────────
+      # ── InveighZero (C#) ──────────────────────────────────────────────────────
       - name: "[InveighZero] Clone"
         run: git clone --depth 1 https://github.com/Kevin-Robertson/Inveigh.git C:\src\Inveigh
 
@@ -718,20 +618,20 @@ env:
         run: |
           cd C:\src\Inveigh
           dotnet restore
-          dotnet build -c Release /p:Platform=${{ matrix.msbuild_platform }}
+          dotnet build -c Release
           $exe = Get-ChildItem C:\src\Inveigh -Recurse -Filter "Inveigh.exe" |
                  Where-Object { $_.FullName -match "Release" } | Select-Object -First 1
           if ($exe) { Copy-Item $exe.FullName "$env:GITHUB_WORKSPACE\dist\binaries\InveighZero.exe" }
           else { exit 1 }
 
-      - name: "[InveighZero] Log result"
+      - name: "[InveighZero] Log"
         shell: pwsh
         run: |
-          . dist\report_helpers.ps1
+          . dist\helpers.ps1
           if ("${{ steps.inveigh.outcome }}" -eq "success") { Log-Success "InveighZero" }
-          else { Log-Failure "InveighZero" "dotnet build failed — check logs" }
+          else { Log-Failure "InveighZero" "dotnet build failed -- check logs" }
 
-      # ── COMPILED: Snaffler (.NET / C#) ──────────────────────────────────────
+      # ── Snaffler (C#) ─────────────────────────────────────────────────────────
       - name: "[Snaffler] Clone"
         run: git clone --depth 1 https://github.com/SnaffCon/Snaffler.git C:\src\Snaffler
 
@@ -743,24 +643,22 @@ env:
           cd C:\src\Snaffler
           dotnet restore
           dotnet publish -c Release -r ${{ matrix.dotnet_rid }} `
-            --self-contained true `
-            -p:PublishSingleFile=true `
-            -o "$env:GITHUB_WORKSPACE\dist\binaries\Snaffler_out"
-          $exe = Get-ChildItem "$env:GITHUB_WORKSPACE\dist\binaries\Snaffler_out" -Filter "*.exe" |
-                 Select-Object -First 1
+            --self-contained true -p:PublishSingleFile=true `
+            -o "$env:GITHUB_WORKSPACE\dist\binaries\sn_out"
+          $exe = Get-ChildItem "$env:GITHUB_WORKSPACE\dist\binaries\sn_out" -Filter "*.exe" | Select-Object -First 1
           if ($exe) {
             Copy-Item $exe.FullName "$env:GITHUB_WORKSPACE\dist\binaries\Snaffler.exe"
-            Remove-Item "$env:GITHUB_WORKSPACE\dist\binaries\Snaffler_out" -Recurse -Force
+            Remove-Item "$env:GITHUB_WORKSPACE\dist\binaries\sn_out" -Recurse -Force
           } else { exit 1 }
 
-      - name: "[Snaffler] Log result"
+      - name: "[Snaffler] Log"
         shell: pwsh
         run: |
-          . dist\report_helpers.ps1
+          . dist\helpers.ps1
           if ("${{ steps.snaffler.outcome }}" -eq "success") { Log-Success "Snaffler" }
-          else { Log-Failure "Snaffler" "dotnet publish failed — check logs" }
+          else { Log-Failure "Snaffler" "dotnet publish failed -- check logs" }
 
-      # ── COMPILED: noPac (.NET / C#) ─────────────────────────────────────────
+      # ── noPac (C#) ────────────────────────────────────────────────────────────
       - name: "[noPac] Clone"
         run: git clone --depth 1 https://github.com/Ridter/noPac.git C:\src\noPac
 
@@ -770,99 +668,90 @@ env:
         shell: pwsh
         run: |
           cd C:\src\noPac
-          # Attempt dotnet build; project may vary
-          if (Test-Path "*.sln") {
-            dotnet restore
-            dotnet build -c Release /p:Platform=${{ matrix.msbuild_platform }}
-          } elseif (Test-Path "*.csproj") {
-            dotnet restore
-            dotnet build -c Release /p:Platform=${{ matrix.msbuild_platform }}
-          } else { exit 1 }
+          dotnet restore
+          dotnet build -c Release
           $exe = Get-ChildItem C:\src\noPac -Recurse -Filter "*.exe" |
                  Where-Object { $_.FullName -match "Release" } | Select-Object -First 1
           if ($exe) { Copy-Item $exe.FullName "$env:GITHUB_WORKSPACE\dist\binaries\noPac.exe" }
           else { exit 1 }
 
-      - name: "[noPac] Log result"
+      - name: "[noPac] Log"
         shell: pwsh
         run: |
-          . dist\report_helpers.ps1
+          . dist\helpers.ps1
           if ("${{ steps.nopac.outcome }}" -eq "success") { Log-Success "noPac" }
-          else { Log-Failure "noPac" "dotnet build failed — check logs" }
+          else { Log-Failure "noPac" "dotnet build failed -- check logs" }
 
-      # ── COMPILED: Mimikatz (C — MSVC) ───────────────────────────────────────
+      # ── Mimikatz (C / MSVC) ───────────────────────────────────────────────────
       - name: "[Mimikatz] Clone"
         run: git clone --depth 1 https://github.com/ParrotSec/mimikatz.git C:\src\mimikatz
 
-      - name: "[Mimikatz] Build via MSBuild"
+      - name: "[Mimikatz] Build"
         id: mimikatz
         continue-on-error: true
         shell: pwsh
         run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild `
-                       -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1
-          if (-not $msbuild) { exit 1 }
-          & "$msbuild" "C:\src\mimikatz\mimikatz.sln" `
-            /p:Configuration=Release `
-            /p:Platform=${{ matrix.msbuild_platform }} `
-            /m
+          $sln = "C:\src\mimikatz\mimikatz.sln"
+          if (-not (Test-Path $sln)) { exit 1 }
+          msbuild $sln /p:Configuration=Release /p:Platform=${{ matrix.msbuild_platform }} /m
           $exe = Get-ChildItem "C:\src\mimikatz" -Recurse -Filter "mimikatz.exe" |
                  Where-Object { $_.FullName -match "Release" } | Select-Object -First 1
           if ($exe) { Copy-Item $exe.FullName "$env:GITHUB_WORKSPACE\dist\binaries\mimikatz.exe" }
           else { exit 1 }
 
-      - name: "[Mimikatz] Log result"
+      - name: "[Mimikatz] Log"
         shell: pwsh
         run: |
-          . dist\report_helpers.ps1
+          . dist\helpers.ps1
           if ("${{ steps.mimikatz.outcome }}" -eq "success") { Log-Success "Mimikatz" }
-          else { Log-Failure "Mimikatz" "MSVC build failed — check logs" }
+          else { Log-Failure "Mimikatz" "MSVC/MSBuild failed -- check logs" }
 
-      # ── Package everything ──────────────────────────────────────────────────
+      # ── Package and release ───────────────────────────────────────────────────
       - name: Assemble release archive
         shell: pwsh
         run: |
           $tag = "${{ matrix.release_tag }}"
-          New-Item -ItemType Directory -Force -Path "release\$tag" | Out-Null
-          # Binaries
+          New-Item -ItemType Directory -Force -Path "release\$tag\binaries" | Out-Null
           if (Test-Path "dist\binaries") {
-            Copy-Item -Path "dist\binaries\*" -Destination "release\$tag\" -Recurse -Force
+            Copy-Item -Path "dist\binaries\*" -Destination "release\$tag\binaries\" -Recurse -Force
           }
-          # Scripts (shared)
           if (Test-Path "staging\scripts") {
             Copy-Item -Path "staging\scripts" -Destination "release\$tag\scripts" -Recurse -Force
           }
-          # Build report
           Copy-Item "dist\build_report.md" "release\$tag\build_report.md"
-          # Zip
-          Compress-Archive -Path "release\$tag\*" -DestinationPath "${tag}.zip" -Force
+          Compress-Archive -Path "release\$tag\*" -DestinationPath "$tag.zip" -Force
 
-      - name: Read build report
+      - name: Upload build report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-report-${{ matrix.release_tag }}
+          path: dist/build_report.md
+          retention-days: 7
+
+      - name: Read build report for release body
         id: report
         shell: pwsh
         run: |
-          $body = Get-Content dist\build_report.md -Raw
-          "body<<EOF" | Out-File -Append $env:GITHUB_OUTPUT
-          $body | Out-File -Append $env:GITHUB_OUTPUT
-          "EOF" | Out-File -Append $env:GITHUB_OUTPUT
+          $body = Get-Content dist\build_report.md -Raw -Encoding UTF8
+          "body<<EOF" | Out-File -Append $env:GITHUB_OUTPUT -Encoding UTF8
+          $body        | Out-File -Append $env:GITHUB_OUTPUT -Encoding UTF8
+          "EOF"        | Out-File -Append $env:GITHUB_OUTPUT -Encoding UTF8
 
-      - name: Create / update release
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ matrix.release_tag }}
           name: "${{ matrix.release_name }} — ${{ github.run_id }}"
           body: ${{ steps.report.outputs.body }}
-          prerelease: false
           files: |
             ${{ matrix.release_tag }}.zip
             dist/build_report.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB: Summary — post a single workflow summary with all build reports
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
+# JOB 4 — Workflow summary (always runs, collates all four build reports)
+# =============================================================================
   summary:
     name: Workflow Summary
     runs-on: ubuntu-latest
@@ -878,27 +767,26 @@ env:
 
       - name: Write job summary
         run: |
-          echo "# 🔧 Nightly Pentest Toolkit — Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "**Run:** \`${{ github.run_id }}\` | **Date:** $(date -u '+%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "> **Manual trigger:** ${{ github.event.inputs.reason }}" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "## Releases Published" >> $GITHUB_STEP_SUMMARY
-          echo "| Release | Contents |" >> $GITHUB_STEP_SUMMARY
-          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| \`nightly-linux-x64\`   | nmap, kerbrute, ligolo-proxy, ligolo-agent, chisel + all scripts |" >> $GITHUB_STEP_SUMMARY
-          echo "| \`nightly-linux-x86\`   | nmap, kerbrute, ligolo-proxy, ligolo-agent, chisel + all scripts |" >> $GITHUB_STEP_SUMMARY
-          echo "| \`nightly-windows-x64\` | nmap, kerbrute, ligolo-proxy, ligolo-agent, chisel, SharpHound, SharpView, Rubeus, InveighZero, Snaffler, noPac, Mimikatz + all scripts |" >> $GITHUB_STEP_SUMMARY
-          echo "| \`nightly-windows-x86\` | nmap, kerbrute, ligolo-proxy, ligolo-agent, chisel, SharpHound, SharpView, Rubeus, InveighZero, Snaffler, noPac, Mimikatz + all scripts |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "## Per-Target Build Reports" >> $GITHUB_STEP_SUMMARY
-          for f in all-reports/*.md; do
-            echo "---" >> $GITHUB_STEP_SUMMARY
-            cat "$f" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-          done
+          {
+            echo "# Nightly Pentest Toolkit — Build Summary"
+            echo "**Run:** \`${{ github.run_id }}\` | **Date:** $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo ""
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              echo "> **Manual trigger:** ${{ github.event.inputs.reason }}"
+              echo ""
+            fi
+            echo "## Releases Published"
+            echo "| Release Tag | Compiled Binaries | Scripts |"
+            echo "|---|---|---|"
+            echo "| \`nightly-linux-x64\`   | nmap, kerbrute, ligolo-proxy, ligolo-agent, chisel | all |"
+            echo "| \`nightly-linux-x86\`   | nmap, kerbrute, ligolo-proxy, ligolo-agent, chisel | all |"
+            echo "| \`nightly-windows-x64\` | nmap, kerbrute, ligolo-proxy, ligolo-agent, chisel, SharpHound, SharpView, Rubeus, InveighZero, Snaffler, noPac, Mimikatz | all |"
+            echo "| \`nightly-windows-x86\` | nmap, kerbrute, ligolo-proxy, ligolo-agent, chisel, SharpHound, SharpView, Rubeus, InveighZero, Snaffler, noPac, Mimikatz | all |"
+            echo ""
+            echo "## Per-Target Build Reports"
+            for f in all-reports/*.md; do
+              echo "---"
+              cat "$f"
+              echo ""
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
