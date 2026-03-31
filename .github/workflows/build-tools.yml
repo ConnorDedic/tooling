@@ -1,18 +1,18 @@
 name: Build and Release Toolkit
 
 on:
-  workflow_dispatch:   # allows manual runs
+  workflow_dispatch:   # manual trigger
   push:
     tags:
       - 'v*'
 
 env:
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   TEMP_DIR: artifacts
 
 jobs:
   build-toolkit:
     runs-on: windows-latest
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -31,33 +31,73 @@ jobs:
         run: mkdir $env:TEMP_DIR
 
       - name: Download GhostPack Tools & Extras
+        shell: pwsh
         run: |
-          function Get-LatestAsset($repo, $filter, $out) {
-              $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers @{ "User-Agent" = "PowerShell" }
-              $asset = $release.assets | Where-Object { $_.name -like "*$filter*" } | Select-Object -First 1
-              if ($null -eq $asset) {
-                  Write-Warning "No matching asset for $repo with filter $filter"
-                  return
-              }
-              Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$env:TEMP_DIR\$($asset.name)"
+          function Get-LatestAsset($repo, $filter) {
+              try {
+                  $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers @{ "User-Agent" = "PowerShell" }
+                  $asset = $release.assets | Where-Object { $_.name -like "*$filter*" } | Select-Object -First 1
+                  if ($null -eq $asset) { Write-Warning "No matching asset for $repo with filter $filter"; return $null }
+                  $outFile = Join-Path $env:TEMP_DIR $asset.name
+                  Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $outFile
+                  return $outFile
+              } catch { Write-Warning "Failed to download asset for $repo: $_"; return $null }
           }
 
-          # GhostPack tools
-          Get-LatestAsset "BloodHoundAD/SharpHound" "windows_x86.zip" "SharpHound.zip"
-          Get-LatestAsset "GhostPack/Rubeus" "exe" "Rubeus.exe"
-          Get-LatestAsset "gentilkiwi/mimikatz" "trunk.zip" "Mimikatz.zip"
-          Get-LatestAsset "ropnop/kerbrute" "windows_386.exe" "Kerbrute.exe"
-          Get-LatestAsset "GhostPack/Snaffler" "exe" "Snaffler.exe"
-          Get-LatestAsset "GhostPack/Inveigh" "exe" "Inveigh.exe"
-          Get-LatestAsset "Porchetta-Industries/CrackMapExec" "cme-*.zip" "CME.zip"
-          Get-LatestAsset "nmap/nmap" "zip" "Nmap.zip"  # If available
+          $tools = @{
+              "BloodHoundAD/SharpHound" = "windows_x86.zip"
+              "GhostPack/Rubeus" = "exe"
+              "gentilkiwi/mimikatz" = "trunk.zip"
+              "ropnop/kerbrute" = "windows_386.exe"
+              "GhostPack/Snaffler" = "exe"
+              "GhostPack/Inveigh" = "exe"
+              "Porchetta-Industries/CrackMapExec" = "cme-*.zip"
+              "nmap/nmap" = "zip"
+          }
 
-      - name: List downloaded artifacts
+          foreach ($repo in $tools.Keys) {
+              Get-LatestAsset $repo $tools[$repo]
+          }
+
+      - name: Add creation date comments to sources
+        shell: pwsh
+        run: |
+          $date = Get-Date -Format "yyyy-MM-dd"
+          $srcFiles = Get-ChildItem -Recurse -Include *.cs,*.go,*.ps1,*.c,*.cpp
+          foreach ($file in $srcFiles) {
+              $content = Get-Content $file
+              $commentLine = "// Created on $date"
+              if ($file.Extension -eq ".ps1") { $commentLine = "# Created on $date" }
+              Set-Content $file -Value ($commentLine + "`n" + $content)
+          }
+
+      - name: Compile / Build tools
+        shell: pwsh
+        run: |
+          # Example: Compile Go binaries
+          $goProjects = Get-ChildItem -Recurse -Include *.go
+          foreach ($proj in $goProjects) {
+              go build -o "$env:TEMP_DIR\$($proj.BaseName).exe" $proj.FullName
+          }
+          # You can expand this section for .NET, C/C++ builds as needed
+
+      - name: List downloaded and built artifacts
         run: Get-ChildItem $env:TEMP_DIR
 
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.TEMP_DIR }}\*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Auto-tag if missing
+        shell: pwsh
+        run: |
+          $currentTag = git describe --tags --exact-match HEAD 2>$null
+          if (-not $currentTag) {
+              $newTag = "v" + (Get-Date -Format "yyyyMMddHHmm")
+              git tag $newTag
+              git push origin $newTag
+              Write-Output "Created and pushed new tag: $newTag"
+          }
