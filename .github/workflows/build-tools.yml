@@ -1,242 +1,50 @@
-name: Nightly Tool Build & Release
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: "0 3 * * *"
+name: Build Ghostpack Tools
 
-env:
-  NMAP_VERSION: "7.94"
-  DOTNET_NOLOGO: "true"
-  DOTNET_CLI_TELEMETRY_OPTOUT: "true"
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
-
-  # ── kerbrute ────────────────────────────────────────────────────────────────
-  kerbrute:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.21"
-          cache: false
-      - name: Clone & Build
-        run: |
-          git clone https://github.com/ropnop/kerbrute.git
-          cd kerbrute
-          GOARCH=386 GOOS=windows go build -o kerbrute.exe
-          GOARCH=386 GOOS=linux   go build -o kerbrute_linux
-          zip ../kerbrute-windows-x86.zip kerbrute.exe
-          zip ../kerbrute-linux-x86.zip kerbrute_linux
-      - uses: actions/upload-artifact@v4
-        with:
-          name: kerbrute
-          path: |
-            *.zip
-
-  # ── sharphound ─────────────────────────────────────────────────────────────
-  sharphound:
+  build:
     runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: microsoft/setup-msbuild@v2
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-      - name: Clone & Build
-        shell: pwsh
-        run: |
-          git clone https://github.com/SpecterOps/SharpHound.git
-          cd SharpHound
-          $proj = Get-ChildItem -Recurse -Filter "*.csproj" | Select-Object -First 1
-          $projContent = Get-Content $proj.FullName -Raw
-          if ($projContent -match '<TargetFramework>(.+?)</TargetFramework>') {
-              $framework = $Matches[1]
-          } elseif ($projContent -match '<TargetFrameworks>(.+?)</TargetFrameworks>') {
-              $framework = $Matches[1].Split(';')[0]
-          } else {
-              $framework = "net462"
-          }
-          Write-Host "Detected framework: $framework"
-          dotnet restore $proj.FullName
-          if ($framework -like "net4*") {
-              msbuild $proj.FullName /p:Configuration=Release /p:Platform="AnyCPU" /m
-              $outDir = Get-ChildItem -Path $proj.DirectoryName -Recurse -Directory | Where-Object { $_.FullName -match "bin\\Release" } | Sort-Object FullName -Descending | Select-Object -First 1
-              Compress-Archive "$($outDir.FullName)\*" ..\..\sharphound-windows.zip
-          } else {
-              dotnet publish $proj.FullName -c Release -f $framework -r win-x64 --self-contained true -o out\win
-              Compress-Archive out\win\* ..\..\sharphound-windows.zip
-          }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sharphound
-          path: |
-            *.zip
 
-  # ── mimikatz ───────────────────────────────────────────────────────────────
-  mimikatz:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: microsoft/setup-msbuild@v2
-      - name: Clone & Build
-        shell: pwsh
-        run: |
-          git clone https://github.com/gentilkiwi/mimikatz.git
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vsPath = & $vswhere -latest -products * `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-            -property installationPath
-          Write-Host "VS path: $vsPath"
-          $vcvars = "$vsPath\VC\Auxiliary\Build\vcvars32.bat"
-          cmd /c "`"$vcvars`" && msbuild mimikatz\mimikatz.sln /p:Configuration=Release /p:Platform=Win32 /m"
-      - name: Package
-        shell: pwsh
-        run: |
-          $exe = Get-ChildItem -Path mimikatz -Recurse -Filter mimikatz.exe | Select-Object -First 1
-          if (-not $exe) { throw "mimikatz.exe not found" }
-          Copy-Item $exe.FullName mimikatz.exe
-          Compress-Archive mimikatz.exe mimikatz-windows-x86.zip
-      - uses: actions/upload-artifact@v4
-        with:
-          name: mimikatz
-          path: |
-            mimikatz-windows-x86.zip
+    strategy:
+      matrix:
+        project: [crackmapexec, mimikatz, inveigh, snaffler, rubeus, sharphound, kerbrute]
 
-  # ── rubeus ────────────────────────────────────────────────────────────────
-  rubeus:
-    runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: microsoft/setup-msbuild@v2
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-      - name: Clone & Build
-        shell: pwsh
-        run: |
-          git clone https://github.com/GhostPack/Rubeus.git
-          cd Rubeus
-          $proj = Get-ChildItem -Recurse -Filter "*.csproj" | Select-Object -First 1
-          $projContent = Get-Content $proj.FullName -Raw
-          if ($projContent -match '<TargetFramework>(.+?)</TargetFramework>') {
-              $framework = $Matches[1]
-          } elseif ($projContent -match '<TargetFrameworks>(.+?)</TargetFrameworks>') {
-              $framework = $Matches[1].Split(';')[0]
-          } else {
-              $framework = "net462"
-          }
-          Write-Host "Framework: $framework"
-          dotnet restore $proj.FullName
-          if ($framework -like "net4*") {
-              msbuild $proj.FullName /p:Configuration=Release /p:Platform="AnyCPU" /m
-              $outDir = Get-ChildItem -Path $proj.DirectoryName -Recurse -Directory | Where-Object { $_.FullName -match "bin\\Release" } | Sort-Object FullName -Descending | Select-Object -First 1
-              Compress-Archive "$($outDir.FullName)\Rubeus.exe" ..\..\rubeus-windows.zip
-          } else {
-              dotnet publish $proj.FullName -c Release -r win-x64 --self-contained true -o out\win
-              Compress-Archive out\win\* ..\..\rubeus-windows.zip
-          }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: rubeus
-          path: |
-            *.zip
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  # ── inveigh ────────────────────────────────────────────────────────────────
-  inveigh:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: microsoft/setup-msbuild@v2
-      - uses: actions/setup-dotnet@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "8.0.x"
-      - name: Clone & Build
-        shell: pwsh
-        run: |
-          git clone https://github.com/Kevin-Robertson/Inveigh.git
-          cd Inveigh
-          $proj = Get-ChildItem -Recurse -Filter "*.csproj" | Select-Object -First 1
-          $projContent = Get-Content $proj.FullName -Raw
-          if ($projContent -match '<TargetFramework>(.+?)</TargetFramework>') {
-              $framework = $Matches[1]
-          } elseif ($projContent -match '<TargetFrameworks>(.+?)</TargetFrameworks>') {
-              $framework = $Matches[1].Split(';')[0]
-          } else {
-              $framework = "net462"
-          }
-          Write-Host "Framework: $framework"
-          dotnet restore $proj.FullName
-          if ($framework -like "net4*") {
-              msbuild $proj.FullName /p:Configuration=Release /p:Platform="AnyCPU" /m
-              $outDir = Get-ChildItem -Path $proj.DirectoryName -Recurse -Directory | Where-Object { $_.FullName -match "bin\\Release" } | Sort-Object FullName -Descending | Select-Object -First 1
-              Compress-Archive "$($outDir.FullName)\*.exe" ..\..\inveigh-windows.zip
-          } else {
-              dotnet publish $proj.FullName -c Release -r win-x64 --self-contained true -o out\win
-              Compress-Archive out\win\* ..\..\inveigh-windows.zip
-          }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: inveigh
-          path: |
-            *.zip
+          dotnet-version: '7.0.x'
 
-  # ── snaffler ───────────────────────────────────────────────────────────────
-  snaffler:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: microsoft/setup-msbuild@v2
-      - uses: actions/setup-dotnet@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
         with:
-          dotnet-version: "8.0.x"
-      - name: Clone & Build
-        shell: pwsh
-        run: |
-          git clone https://github.com/SnaffCon/Snaffler.git
-          cd Snaffler
-          $proj = Get-ChildItem -Recurse -Filter "*.csproj" | Where-Object { $_.Name -notmatch "[Tt]est" } | Select-Object -First 1
-          $projContent = Get-Content $proj.FullName -Raw
-          if ($projContent -match '<TargetFramework>(.+?)</TargetFramework>') {
-              $framework = $Matches[1]
-          } elseif ($projContent -match '<TargetFrameworks>(.+?)</TargetFrameworks>') {
-              $framework = $Matches[1].Split(';')[0]
-          } else {
-              $framework = "net462"
-          }
-          Write-Host "Framework: $framework"
-          dotnet restore $proj.FullName
-          if ($framework -like "net4*") {
-              msbuild $proj.FullName /p:Configuration=Release /p:Platform="AnyCPU" /m
-              $outDir = Get-ChildItem -Path $proj.DirectoryName -Recurse -Directory | Where-Object { $_.FullName -match "bin\\Release" } | Sort-Object FullName -Descending | Select-Object -First 1
-              Compress-Archive "$($outDir.FullName)\*.exe" ..\..\snaffler-windows.zip
-          } else {
-              dotnet publish $proj.FullName -c Release -r win-x64 --self-contained true -o out\win
-              Compress-Archive out\win\* ..\..\snaffler-windows.zip
-          }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: snaffler
-          path: |
-            *.zip
+          node-version: '24'
 
-  # ── crackmapexec / netexec ──────────────────────────────────────────────────
-  crackmapexec:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install NetExec & Package
-        run: |
-          python3 -m pip install --user pipx
-          python3 -m pipx ensurepath
-          export PATH=$HOME/.local/bin:$PATH
-          pipx install netexec --force
-          mkdir cme-tools
-          cp ~/.local/bin/netexec cme-tools/ || true
-          cp ~/.local/bin/nxc cme-tools/ || true
-          cp ~/.local/bin/crackmapexec cme-tools/ || true
-          zip -r crackmapexec-linux.zip cme-tools
-      - uses: actions/upload-artifact@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          name: crackmapexec
-          path: |
-            crackmapexec-linux.zip
+          go-version: '1.22'
+
+      - name: Restore NuGet packages
+        run: dotnet restore
+
+      - name: Build project
+        run: |
+          dotnet build ./tools/${{ matrix.project }}/${{ matrix.project }}.csproj -c Release --framework net462
+
+      - name: Publish project
+        run: |
+          dotnet publish ./tools/${{ matrix.project }}/${{ matrix.project }}.csproj -c Release --framework net462 -o ./artifacts/${{ matrix.project }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.project }}
+          path: ./artifacts/${{ matrix.project }}
