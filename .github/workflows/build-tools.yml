@@ -1,27 +1,29 @@
-name: Download Red Team Toolkit
+name: Build & Release Red Team Toolkit
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v1.0, v1.1, etc.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build-toolkit:
+  release-toolkit:
     runs-on: windows-latest
-    continue-on-error: true
 
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Create artifact dir
+      - name: Create artifacts folder
         run: mkdir artifacts
 
-      - name: Install jq (for GitHub API parsing)
+      - name: Install jq
         run: choco install jq -y
 
-      - name: Helper function (download latest release asset)
+      - name: Helper function to download latest release assets
         shell: powershell
         run: |
           function Get-LatestAsset($repo, $filter, $out) {
@@ -40,29 +42,28 @@ jobs:
             }
           }
 
-          # --- Ghostpack / .NET tools ---
+          # Ghostpack / .NET tools
           Get-LatestAsset "GhostPack/Rubeus" "exe" "rubeus.exe"
           Get-LatestAsset "BloodHoundAD/SharpHound" "zip" "sharphound.zip"
           Get-LatestAsset "GhostPack/Inveigh" "exe" "inveigh.exe"
           Get-LatestAsset "GhostPack/Snaffler" "exe" "snaffler.exe"
 
-          # --- Other red team tools ---
+          # Other red team tools
           Get-LatestAsset "gentilkiwi/mimikatz" "zip" "mimikatz.zip"
           Get-LatestAsset "ropnop/kerbrute" "windows" "kerbrute.exe"
           Get-LatestAsset "ropnop/winrmcp" "exe" "winrmcp.exe"
 
-          # --- CrackMapExec (Python tool, grab source) ---
+          # CrackMapExec
           Get-LatestAsset "Porchetta-Industries/CrackMapExec" "zip" "crackmapexec.zip"
 
-      - name: Download Nmap (official)
-        run: |
+          # Nmap official installer
           try {
             curl -L -o artifacts/nmap-setup.exe https://nmap.org/dist/nmap-7.94-setup.exe
           } catch {
             Write-Warning "Failed to download Nmap installer"
           }
 
-      - name: Extract archives
+      - name: Extract zip files
         shell: powershell
         run: |
           Get-ChildItem artifacts\*.zip | ForEach-Object {
@@ -73,8 +74,20 @@ jobs:
             }
           }
 
-      - name: Upload Toolkit
-        uses: actions/upload-artifact@v4
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
         with:
-          name: redteam-toolkit
-          path: artifacts/
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload toolkit artifacts to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
