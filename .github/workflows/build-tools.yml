@@ -25,14 +25,18 @@ jobs:
         shell: powershell
         run: |
           function Get-LatestAsset($repo, $filter, $out) {
-            $api = "https://api.github.com/repos/$repo/releases/latest"
-            $json = Invoke-RestMethod -Uri $api
-            $asset = $json.assets | Where-Object { $_.name -match $filter } | Select-Object -First 1
-            if ($asset) {
-              Write-Host "Downloading $($asset.name) from $repo"
-              Invoke-WebRequest $asset.browser_download_url -OutFile "artifacts\$out"
-            } else {
-              Write-Host "No matching asset for $repo"
+            try {
+              $api = "https://api.github.com/repos/$repo/releases/latest"
+              $json = Invoke-RestMethod -Uri $api
+              $asset = $json.assets | Where-Object { $_.name -match $filter } | Select-Object -First 1
+              if ($asset) {
+                Write-Host "Downloading $($asset.name) from $repo"
+                Invoke-WebRequest $asset.browser_download_url -OutFile "artifacts\$out"
+              } else {
+                Write-Warning "No matching asset for $repo with filter $filter"
+              }
+            } catch {
+              Write-Warning "Failed to download asset from $repo"
             }
           }
 
@@ -52,11 +56,22 @@ jobs:
 
       - name: Download Nmap (official)
         run: |
-          curl -L -o artifacts/nmap-setup.exe https://nmap.org/dist/nmap-7.94-setup.exe
+          try {
+            curl -L -o artifacts/nmap-setup.exe https://nmap.org/dist/nmap-7.94-setup.exe
+          } catch {
+            Write-Warning "Failed to download Nmap installer"
+          }
 
       - name: Extract archives
+        shell: powershell
         run: |
-          powershell -Command "Expand-Archive artifacts\*.zip -DestinationPath artifacts\ -Force"
+          Get-ChildItem artifacts\*.zip | ForEach-Object {
+            try {
+              Expand-Archive $_.FullName -DestinationPath artifacts\ -Force
+            } catch {
+              Write-Warning "Failed to extract $($_.Name)"
+            }
+          }
 
       - name: Upload Toolkit
         uses: actions/upload-artifact@v4
