@@ -1,4 +1,4 @@
-name: Download Security Tools
+name: Download Red Team Toolkit
 
 on:
   workflow_dispatch:
@@ -7,32 +7,59 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  download-tools:
+  build-toolkit:
     runs-on: windows-latest
+    continue-on-error: true
+
     steps:
-      - name: Checkout Repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Create Artifacts Folder
+      - name: Create artifact dir
         run: mkdir artifacts
 
-      - name: Download Ghostpack & Related Binaries
+      - name: Install jq (for GitHub API parsing)
+        run: choco install jq -y
+
+      - name: Helper function (download latest release asset)
+        shell: powershell
         run: |
-          # Ghostpack tools
-          curl -L -o artifacts/crackmapexec.exe https://github.com/r3motecontrol/Ghostpack-CompiledBinaries/releases/latest/download/crackmapexec.exe
-          curl -L -o artifacts/mimikatz.exe https://github.com/r3motecontrol/Ghostpack-CompiledBinaries/releases/latest/download/mimikatz.exe
-          curl -L -o artifacts/inveigh.exe https://github.com/r3motecontrol/Ghostpack-CompiledBinaries/releases/latest/download/inveigh.exe
-          curl -L -o artifacts/snaffler.exe https://github.com/r3motecontrol/Ghostpack-CompiledBinaries/releases/latest/download/snaffler.exe
-          curl -L -o artifacts/rubeus.exe https://github.com/r3motecontrol/Ghostpack-CompiledBinaries/releases/latest/download/rubeus.exe
-          curl -L -o artifacts/sharphound.exe https://github.com/r3motecontrol/Ghostpack-CompiledBinaries/releases/latest/download/sharphound.exe
-          curl -L -o artifacts/kerbrute.exe https://github.com/r3motecontrol/Ghostpack-CompiledBinaries/releases/latest/download/kerbrute.exe
+          function Get-LatestAsset($repo, $filter, $out) {
+            $api = "https://api.github.com/repos/$repo/releases/latest"
+            $json = Invoke-RestMethod -Uri $api
+            $asset = $json.assets | Where-Object { $_.name -match $filter } | Select-Object -First 1
+            if ($asset) {
+              Write-Host "Downloading $($asset.name) from $repo"
+              Invoke-WebRequest $asset.browser_download_url -OutFile "artifacts\$out"
+            } else {
+              Write-Host "No matching asset for $repo"
+            }
+          }
 
-          # External tools
-          curl -L -o artifacts/nmap.zip https://nmap.org/dist/nmap-7.94-setup.exe
-          curl -L -o artifacts/winrmcp.exe https://github.com/ropnop/winrmcp/releases/latest/download/winrmcp.exe
+          # --- Ghostpack / .NET tools ---
+          Get-LatestAsset "GhostPack/Rubeus" "exe" "rubeus.exe"
+          Get-LatestAsset "BloodHoundAD/SharpHound" "zip" "sharphound.zip"
+          Get-LatestAsset "GhostPack/Inveigh" "exe" "inveigh.exe"
+          Get-LatestAsset "GhostPack/Snaffler" "exe" "snaffler.exe"
 
-      - name: Upload Artifacts
+          # --- Other red team tools ---
+          Get-LatestAsset "gentilkiwi/mimikatz" "zip" "mimikatz.zip"
+          Get-LatestAsset "ropnop/kerbrute" "windows" "kerbrute.exe"
+          Get-LatestAsset "ropnop/winrmcp" "exe" "winrmcp.exe"
+
+          # --- CrackMapExec (Python tool, grab source) ---
+          Get-LatestAsset "Porchetta-Industries/CrackMapExec" "zip" "crackmapexec.zip"
+
+      - name: Download Nmap (official)
+        run: |
+          curl -L -o artifacts/nmap-setup.exe https://nmap.org/dist/nmap-7.94-setup.exe
+
+      - name: Extract archives
+        run: |
+          powershell -Command "Expand-Archive artifacts\*.zip -DestinationPath artifacts\ -Force"
+
+      - name: Upload Toolkit
         uses: actions/upload-artifact@v4
         with:
-          name: Security-Tools
+          name: redteam-toolkit
           path: artifacts/
