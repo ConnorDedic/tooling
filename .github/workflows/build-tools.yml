@@ -58,10 +58,13 @@ jobs:
 
       - run: git clone --depth 1 https://github.com/BloodHoundAD/SharpHound.git
 
-      - working-directory: SharpHound
+      - name: Build
         run: |
+          cd SharpHound
+          PROJECT=$(find . -name "*.csproj" | head -n 1)
+
           for RID in win-x64 win-x86 linux-x64 linux-x86; do
-            dotnet publish SharpHound.csproj \
+            dotnet publish "$PROJECT" \
               -c Release \
               -f net8.0 \
               -r $RID \
@@ -71,12 +74,11 @@ jobs:
               -o out/$RID
           done
 
-      - working-directory: SharpHound
-        run: |
-          zip ../sharphound-windows-x64.zip out/win-x64/*
-          zip ../sharphound-windows-x86.zip out/win-x86/*
-          zip ../sharphound-linux-x64.zip out/linux-x64/*
-          zip ../sharphound-linux-x86.zip out/linux-x86/*
+      - run: |
+          zip sharphound-windows-x64.zip SharpHound/out/win-x64/*
+          zip sharphound-windows-x86.zip SharpHound/out/win-x86/*
+          zip sharphound-linux-x64.zip   SharpHound/out/linux-x64/*
+          zip sharphound-linux-x86.zip   SharpHound/out/linux-x86/*
 
       - uses: actions/upload-artifact@v4
         with:
@@ -84,27 +86,27 @@ jobs:
           path: sharphound-*.zip
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # MIMIKATZ (FIXED PATH)
+  # MIMIKATZ (FIXED)
   # ═══════════════════════════════════════════════════════════════════════════
   mimikatz:
     runs-on: windows-latest
     steps:
-      - run: git clone --depth 1 https://github.com/ParrotSec/mimikatz.git
+      - run: git clone --depth 1 https://github.com/gentilkiwi/mimikatz.git
 
       - uses: microsoft/setup-msbuild@v2
 
       - name: Build x64
-        working-directory: mimikatz/mimikatz
-        run: msbuild mimikatz.sln /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /m
+        working-directory: mimikatz
+        run: msbuild mimikatz.sln /p:Configuration=Release /p:Platform=x64 /m
 
       - name: Build x86
-        working-directory: mimikatz/mimikatz
-        run: msbuild mimikatz.sln /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v143 /m
+        working-directory: mimikatz
+        run: msbuild mimikatz.sln /p:Configuration=Release /p:Platform=Win32 /m
 
       - shell: pwsh
         run: |
-          Compress-Archive -Path mimikatz/mimikatz/x64/mimikatz.exe   -DestinationPath mimikatz-windows-x64.zip
-          Compress-Archive -Path mimikatz/mimikatz/Win32/mimikatz.exe -DestinationPath mimikatz-windows-x86.zip
+          Compress-Archive -Path mimikatz/x64/mimikatz.exe   -DestinationPath mimikatz-windows-x64.zip
+          Compress-Archive -Path mimikatz/Win32/mimikatz.exe -DestinationPath mimikatz-windows-x86.zip
 
       - uses: actions/upload-artifact@v4
         with:
@@ -154,12 +156,13 @@ jobs:
     steps:
       - run: |
           wget -q https://nmap.org/dist/nmap-${{ env.NMAP_VERSION }}-win32.zip -O nmap-win.zip
-          unzip -q nmap-win.zip -d nmap-win
+          unzip -q nmap-win.zip
 
-          cd nmap-win
-          DIR=$(find . -type d -name "nmap-*")
-          zip ../nmap-windows-x64.zip "$DIR/nmap.exe" "$DIR/ncat.exe"
-          cp ../nmap-windows-x64.zip ../nmap-windows-x86.zip
+          DIR=$(ls -d nmap-* | head -n 1)
+          test -f "$DIR/nmap.exe" || (echo "nmap.exe not found" && exit 1)
+
+          zip nmap-windows-x64.zip "$DIR/nmap.exe" "$DIR/ncat.exe"
+          cp nmap-windows-x64.zip nmap-windows-x86.zip
 
       - uses: actions/upload-artifact@v4
         with:
@@ -167,7 +170,7 @@ jobs:
           path: nmap-windows-*.zip
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # NETCAT (FIXED SOURCE)
+  # NETCAT (FIXED)
   # ═══════════════════════════════════════════════════════════════════════════
   netcat-linux:
     runs-on: ubuntu-latest
@@ -185,7 +188,7 @@ jobs:
           git clone https://github.com/diegocr/netcat.git nc
           cd nc
           ${{ matrix.arch == 'x86' && 'export CFLAGS=-m32 LDFLAGS=-m32' || 'true' }}
-          make linux
+          gcc -o netcat netcat.c
           cd ..
           zip netcat-linux-${{ matrix.arch }}.zip nc/netcat
 
