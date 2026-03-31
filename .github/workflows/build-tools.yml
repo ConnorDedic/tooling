@@ -1,250 +1,154 @@
 name: Nightly Tool Build & Release
 
 on:
-  schedule:
-    - cron: "0 2 * * *"
   workflow_dispatch:
-
-permissions:
-  contents: write
+  schedule:
+    - cron: "0 3 * * *"
 
 env:
-  RELEASE_TAG: nightly
-  NMAP_VERSION: "7.95"
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  NMAP_VERSION: "7.94"
 
 jobs:
 
-  # ═══════════════════════════════════════════════════════════════════════════
-  # KERBRUTE
-  # ═══════════════════════════════════════════════════════════════════════════
   kerbrute:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-go@v5
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          go-version: stable
+          go-version: "1.21"
 
-      - run: git clone --depth 1 https://github.com/ropnop/kerbrute.git
+      - name: Clone
+        run: git clone https://github.com/ropnop/kerbrute.git
 
-      - working-directory: kerbrute
+      - name: Build (x86 Windows + Linux)
         run: |
-          GOOS=windows GOARCH=amd64 go build -o kerbrute-windows-x64.exe .
-          GOOS=windows GOARCH=386   go build -o kerbrute-windows-x86.exe .
-          GOOS=linux   GOARCH=amd64 go build -o kerbrute-linux-x64 .
-          GOOS=linux   GOARCH=386   go build -o kerbrute-linux-x86 .
+          cd kerbrute
 
-      - working-directory: kerbrute
-        run: |
-          zip kerbrute-windows-x64.zip kerbrute-windows-x64.exe
-          zip kerbrute-windows-x86.zip kerbrute-windows-x86.exe
-          zip kerbrute-linux-x64.zip kerbrute-linux-x64
-          zip kerbrute-linux-x86.zip kerbrute-linux-x86
+          GOARCH=386 GOOS=windows go build -o kerbrute.exe
+          GOARCH=386 GOOS=linux go build -o kerbrute
+
+          zip kerbrute-windows-x86.zip kerbrute.exe
+          zip kerbrute-linux-x86.zip kerbrute
 
       - uses: actions/upload-artifact@v4
         with:
           name: kerbrute
-          path: kerbrute/*.zip
+          path: "*.zip"
 
-  # ═══════════════════════════════════════════════════════════════════════════
-  # SHARPHOUND (FIXED)
-  # ═══════════════════════════════════════════════════════════════════════════
   sharphound:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "8.x"
+          dotnet-version: "8.0.x"
 
-      - run: git clone --depth 1 https://github.com/BloodHoundAD/SharpHound.git
+      - run: git clone https://github.com/BloodHoundAD/SharpHound.git
 
-      - name: Build
+      - name: Build dynamically (x86 only)
         run: |
           cd SharpHound
           PROJECT=$(find . -name "*.csproj" | head -n 1)
+          FRAMEWORK=$(grep -oPm1 "(?<=<TargetFramework>)[^<]+" "$PROJECT")
 
-          for RID in win-x64 win-x86 linux-x64 linux-x86; do
+          dotnet restore "$PROJECT"
+
+          for RID in win-x86 linux-x86; do
             dotnet publish "$PROJECT" \
               -c Release \
-              -f net8.0 \
+              -f "$FRAMEWORK" \
               -r $RID \
               --self-contained true \
               -p:PublishSingleFile=true \
-              -p:EnableCompressionInSingleFile=true \
               -o out/$RID
           done
 
-      - run: |
-          zip sharphound-windows-x64.zip SharpHound/out/win-x64/*
-          zip sharphound-windows-x86.zip SharpHound/out/win-x86/*
-          zip sharphound-linux-x64.zip   SharpHound/out/linux-x64/*
-          zip sharphound-linux-x86.zip   SharpHound/out/linux-x86/*
+          cd out
+          zip -r ../../sharphound-windows-x86.zip win-x86
+          zip -r ../../sharphound-linux-x86.zip linux-x86
 
       - uses: actions/upload-artifact@v4
         with:
           name: sharphound
-          path: sharphound-*.zip
+          path: "*.zip"
 
-  # ═══════════════════════════════════════════════════════════════════════════
-  # MIMIKATZ (FIXED)
-  # ═══════════════════════════════════════════════════════════════════════════
   mimikatz:
     runs-on: windows-latest
     steps:
-      - run: git clone --depth 1 https://github.com/gentilkiwi/mimikatz.git
+      - uses: actions/checkout@v4
+
+      - run: git clone https://github.com/gentilkiwi/mimikatz.git
 
       - uses: microsoft/setup-msbuild@v2
 
-      - name: Build x64
-        working-directory: mimikatz
-        run: msbuild mimikatz.sln /p:Configuration=Release /p:Platform=x64 /m
-
       - name: Build x86
-        working-directory: mimikatz
-        run: msbuild mimikatz.sln /p:Configuration=Release /p:Platform=Win32 /m
-
-      - shell: pwsh
+        shell: cmd
         run: |
-          Compress-Archive -Path mimikatz/x64/mimikatz.exe   -DestinationPath mimikatz-windows-x64.zip
-          Compress-Archive -Path mimikatz/Win32/mimikatz.exe -DestinationPath mimikatz-windows-x86.zip
+          cd mimikatz
+          call "%ProgramFiles(x86)%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          msbuild mimikatz.sln /p:Configuration=Release /p:Platform=Win32 /m
+
+      - run: |
+          cd mimikatz
+          copy x86\mimikatz.exe mimikatz.exe
+          powershell Compress-Archive mimikatz.exe mimikatz-windows-x86.zip
 
       - uses: actions/upload-artifact@v4
         with:
           name: mimikatz
-          path: mimikatz-windows-*.zip
+          path: mimikatz-windows-x86.zip
 
-  # ═══════════════════════════════════════════════════════════════════════════
-  # NMAP (LINUX)
-  # ═══════════════════════════════════════════════════════════════════════════
-  nmap-linux:
+  netcat:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [x64, x86]
-
     steps:
-      - run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y build-essential libssl-dev libpcap-dev \
-            ${{ matrix.arch == 'x86' && 'gcc-multilib g++-multilib' || '' }}
-
-      - run: |
-          wget -q https://nmap.org/dist/nmap-${{ env.NMAP_VERSION }}.tar.bz2
-          tar xjf nmap-${{ env.NMAP_VERSION }}.tar.bz2
-
-      - working-directory: nmap-${{ env.NMAP_VERSION }}
+      - name: Install netcat
         run: |
-          ${{ matrix.arch == 'x86' && 'export CFLAGS=-m32 CXXFLAGS=-m32 LDFLAGS=-m32' || 'true' }}
-          ./configure --without-ndiff --without-zenmap --without-nmap-update
-          make -j$(nproc)
+          sudo apt-get update -qq
+          sudo apt-get install -y netcat-traditional
 
-      - run: |
-          zip nmap-linux-${{ matrix.arch }}.zip \
-            nmap-${{ env.NMAP_VERSION }}/nmap \
-            nmap-${{ env.NMAP_VERSION }}/ncat/ncat
+      - name: Package (Linux + Windows via prebuilt)
+        run: |
+          cp /bin/nc netcat
+          zip netcat-linux-x86.zip netcat
+
+          # Windows prebuilt fallback (stable)
+          wget -q https://eternallybored.org/misc/netcat/netcat-win32-1.12.zip
+          unzip -q netcat-win32-1.12.zip
+          zip netcat-windows-x86.zip nc.exe
 
       - uses: actions/upload-artifact@v4
         with:
-          name: nmap-linux-${{ matrix.arch }}
-          path: nmap-linux-${{ matrix.arch }}.zip
+          name: netcat
+          path: "*.zip"
 
-  # ═══════════════════════════════════════════════════════════════════════════
-  # NMAP (WINDOWS FIXED)
-  # ═══════════════════════════════════════════════════════════════════════════
-  nmap-windows:
+  nmap:
     runs-on: ubuntu-latest
     steps:
-      - run: |
+      - name: Linux build (x86)
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -qq
+          sudo apt-get install -y gcc-multilib make libpcap-dev
+
+          wget -q https://nmap.org/dist/nmap-${{ env.NMAP_VERSION }}.tar.bz2
+          tar -xjf nmap-${{ env.NMAP_VERSION }}.tar.bz2
+          cd nmap-${{ env.NMAP_VERSION }}
+
+          ./configure --host=i686-linux-gnu
+          make -j$(nproc)
+
+          zip ../nmap-linux-x86.zip nmap
+
+      - name: Windows prebuilt
+        run: |
           wget -q https://nmap.org/dist/nmap-${{ env.NMAP_VERSION }}-win32.zip -O nmap-win.zip
           unzip -q nmap-win.zip
 
-          DIR=$(ls -d nmap-* | head -n 1)
-          test -f "$DIR/nmap.exe" || (echo "nmap.exe not found" && exit 1)
+          DIR=$(find . -maxdepth 1 -type d -name "nmap-*" | head -n 1)
 
-          zip nmap-windows-x64.zip "$DIR/nmap.exe" "$DIR/ncat.exe"
-          cp nmap-windows-x64.zip nmap-windows-x86.zip
+          zip nmap-windows-x86.zip "$DIR/nmap.exe" "$DIR/ncat.exe" || true
 
       - uses: actions/upload-artifact@v4
         with:
-          name: nmap-windows
-          path: nmap-windows-*.zip
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # NETCAT (FIXED)
-  # ═══════════════════════════════════════════════════════════════════════════
-  netcat-linux:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [x64, x86]
-
-    steps:
-      - run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y build-essential \
-            ${{ matrix.arch == 'x86' && 'gcc-multilib' || '' }}
-
-      - run: |
-          git clone https://github.com/diegocr/netcat.git nc
-          cd nc
-          ${{ matrix.arch == 'x86' && 'export CFLAGS=-m32 LDFLAGS=-m32' || 'true' }}
-          gcc -o netcat netcat.c
-          cd ..
-          zip netcat-linux-${{ matrix.arch }}.zip nc/netcat
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: netcat-linux-${{ matrix.arch }}
-          path: netcat-linux-${{ matrix.arch }}.zip
-
-  netcat-windows:
-    runs-on: ubuntu-latest
-    steps:
-      - run: |
-          wget -q https://eternallybored.org/misc/netcat/netcat-win32-1.12.zip -O nc-win.zip
-          unzip -q nc-win.zip -d nc-win
-          zip netcat-windows-x64.zip nc-win/nc64.exe
-          zip netcat-windows-x86.zip nc-win/nc.exe
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: netcat-windows
-          path: netcat-windows-*.zip
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # RELEASE
-  # ═══════════════════════════════════════════════════════════════════════════
-  release:
-    needs:
-      - kerbrute
-      - sharphound
-      - mimikatz
-      - nmap-linux
-      - nmap-windows
-      - netcat-linux
-      - netcat-windows
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: assets
-          merge-multiple: true
-
-      - env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release delete "${{ env.RELEASE_TAG }}" \
-            --repo "${{ github.repository }}" \
-            --yes --cleanup-tag 2>/dev/null || true
-
-      - env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ZIPS=$(find assets -name "*.zip" | sort | tr '\n' ' ')
-          gh release create "${{ env.RELEASE_TAG }}" \
-            --repo "${{ github.repository }}" \
-            --title "Nightly — $(date -u +'%Y-%m-%d')" \
-            --prerelease \
-            $ZIPS
+          name: nmap
+          path: "*.zip"
