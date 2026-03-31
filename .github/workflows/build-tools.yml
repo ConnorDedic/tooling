@@ -1,15 +1,13 @@
 name: Nightly Tool Build & Release
-
 on:
   workflow_dispatch:
   schedule:
     - cron: "0 3 * * *"
-
 env:
   NMAP_VERSION: "7.94"
-
 jobs:
 
+  # ── kerbrute ────────────────────────────────────────────────────────────────
   kerbrute:
     runs-on: ubuntu-latest
     steps:
@@ -17,87 +15,86 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.21"
-
+          cache: false          # no go.sum in repo root – skip cache
       - name: Clone
         run: git clone https://github.com/ropnop/kerbrute.git
-
       - name: Build (x86 Windows + Linux)
         run: |
           cd kerbrute
-
           GOARCH=386 GOOS=windows go build -o kerbrute.exe
-          GOARCH=386 GOOS=linux go build -o kerbrute
-
-          zip kerbrute-windows-x86.zip kerbrute.exe
-          zip kerbrute-linux-x86.zip kerbrute
-
+          GOARCH=386 GOOS=linux   go build -o kerbrute_linux
+          zip ../kerbrute-windows-x86.zip kerbrute.exe   # zip into parent so glob works
+          zip ../kerbrute-linux-x86.zip   kerbrute_linux
       - uses: actions/upload-artifact@v4
         with:
           name: kerbrute
           path: "*.zip"
 
+  # ── sharphound ──────────────────────────────────────────────────────────────
   sharphound:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
-
-      - run: git clone https://github.com/BloodHoundAD/SharpHound.git
-
-      - name: Build dynamically (x86 only)
+      - name: Clone
+        run: git clone https://github.com/SpecterOps/SharpHound.git
+      - name: Build (Windows x86 self-contained, Linux framework-dependent)
         run: |
           cd SharpHound
           PROJECT=$(find . -name "*.csproj" | head -n 1)
           FRAMEWORK=$(grep -oPm1 "(?<=<TargetFramework>)[^<]+" "$PROJECT")
-
           dotnet restore "$PROJECT"
 
-          for RID in win-x86 linux-x86; do
-            dotnet publish "$PROJECT" \
-              -c Release \
-              -f "$FRAMEWORK" \
-              -r $RID \
-              --self-contained true \
-              -p:PublishSingleFile=true \
-              -o out/$RID
-          done
+          # Windows x86 – single-file is supported on win- RIDs
+          dotnet publish "$PROJECT" \
+            -c Release -f "$FRAMEWORK" -r win-x86 \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -o out/win-x86
+
+          # Linux x64 – self-contained but NOT single-file (net8 limitation on linux-x86)
+          dotnet publish "$PROJECT" \
+            -c Release -f "$FRAMEWORK" -r linux-x64 \
+            --self-contained true \
+            -o out/linux-x64
 
           cd out
           zip -r ../../sharphound-windows-x86.zip win-x86
-          zip -r ../../sharphound-linux-x86.zip linux-x86
-
+          zip -r ../../sharphound-linux-x64.zip  linux-x64
       - uses: actions/upload-artifact@v4
         with:
           name: sharphound
           path: "*.zip"
 
+  # ── mimikatz ────────────────────────────────────────────────────────────────
   mimikatz:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
       - run: git clone https://github.com/gentilkiwi/mimikatz.git
-
       - uses: microsoft/setup-msbuild@v2
-
       - name: Build x86
         shell: cmd
         run: |
           cd mimikatz
-          call "%ProgramFiles(x86)%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars32.bat"
+          :: GitHub runners ship BuildTools, not Enterprise – use vswhere to locate vcvars
+          for /f "usebackq tokens=*" %%i in (
+            `"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`
+          ) do set VS_PATH=%%i
+          call "%VS_PATH%\VC\Auxiliary\Build\vcvars32.bat"
           msbuild mimikatz.sln /p:Configuration=Release /p:Platform=Win32 /m
-
-      - run: |
-          cd mimikatz
-          copy x86\mimikatz.exe mimikatz.exe
-          powershell Compress-Archive mimikatz.exe mimikatz-windows-x86.zip
-
+      - name: Package
+        shell: pwsh
+        run: |
+          Copy-Item mimikatz\Win32\Release\mimikatz.exe mimikatz.exe
+          Compress-Archive mimikatz.exe mimikatz-windows-x86.zip
       - uses: actions/upload-artifact@v4
         with:
           name: mimikatz
           path: mimikatz-windows-x86.zip
 
+  # ── netcat ──────────────────────────────────────────────────────────────────
   netcat:
     runs-on: ubuntu-latest
     steps:
@@ -105,22 +102,19 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y netcat-traditional
-
-      - name: Package (Linux + Windows via prebuilt)
+      - name: Package
         run: |
           cp /bin/nc netcat
           zip netcat-linux-x86.zip netcat
-
-          # Windows prebuilt fallback (stable)
           wget -q https://eternallybored.org/misc/netcat/netcat-win32-1.12.zip
           unzip -q netcat-win32-1.12.zip
           zip netcat-windows-x86.zip nc.exe
-
       - uses: actions/upload-artifact@v4
         with:
           name: netcat
           path: "*.zip"
 
+  # ── nmap ────────────────────────────────────────────────────────────────────
   nmap:
     runs-on: ubuntu-latest
     steps:
@@ -128,27 +122,291 @@ jobs:
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update -qq
-          sudo apt-get install -y gcc-multilib make libpcap-dev
-
+          # libpcap-dev:i386 is required for a true 32-bit build
+          sudo apt-get install -y gcc-multilib make libpcap-dev libpcap-dev:i386
           wget -q https://nmap.org/dist/nmap-${{ env.NMAP_VERSION }}.tar.bz2
           tar -xjf nmap-${{ env.NMAP_VERSION }}.tar.bz2
           cd nmap-${{ env.NMAP_VERSION }}
-
-          ./configure --host=i686-linux-gnu
+          CFLAGS="-m32" CXXFLAGS="-m32" LDFLAGS="-m32" \
+            ./configure --host=i686-linux-gnu
           make -j$(nproc)
-
           zip ../nmap-linux-x86.zip nmap
-
       - name: Windows prebuilt
         run: |
           wget -q https://nmap.org/dist/nmap-${{ env.NMAP_VERSION }}-win32.zip -O nmap-win.zip
           unzip -q nmap-win.zip
-
           DIR=$(find . -maxdepth 1 -type d -name "nmap-*" | head -n 1)
-
           zip nmap-windows-x86.zip "$DIR/nmap.exe" "$DIR/ncat.exe" || true
-
       - uses: actions/upload-artifact@v4
         with:
           name: nmap
           path: "*.zip"
+
+  # ── impacket ────────────────────────────────────────────────────────────────
+  impacket:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Impacket suite
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y python3 python3-pip python3-venv
+          python3 -m venv impacket-env
+          source impacket-env/bin/activate
+          pip install impacket
+          # Collect the scripts we care about
+          SCRIPTS="GetUserSPNs.py GetNPUsers.py secretsdump.py psexec.py \
+                   wmiexec.py lookupsid.py ticketer.py raiseChild.py \
+                   mssqlclient.py ntlmrelayx.py"
+          mkdir impacket-tools
+          BIN=$(python3 -c "import sysconfig; print(sysconfig.get_path('scripts'))")
+          for s in $SCRIPTS; do
+            cp "$BIN/$s" impacket-tools/ 2>/dev/null || true
+          done
+          zip -r impacket-tools.zip impacket-tools
+      - uses: actions/upload-artifact@v4
+        with:
+          name: impacket
+          path: impacket-tools.zip
+
+  # ── bloodhound-python ────────────────────────────────────────────────────────
+  bloodhound-python:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install bloodhound-python
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y python3 python3-pip
+          pip3 install bloodhound
+          mkdir bh-tools
+          cp "$(which bloodhound-python)" bh-tools/ 2>/dev/null || \
+            cp "$(python3 -m site --user-base)/bin/bloodhound-python" bh-tools/ || true
+          zip bloodhound-python.zip bh-tools/bloodhound-python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bloodhound-python
+          path: bloodhound-python.zip
+
+  # ── crackmapexec / netexec ───────────────────────────────────────────────────
+  crackmapexec:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install NetExec (CrackMapExec successor)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y python3 python3-pip pipx
+          pipx install netexec
+          mkdir cme-tools
+          cp "$HOME/.local/bin/netexec" cme-tools/netexec || \
+            cp "$(which nxc)" cme-tools/netexec || true
+          zip crackmapexec-linux.zip cme-tools/netexec
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crackmapexec
+          path: crackmapexec-linux.zip
+
+  # ── kerbrute (already above) / rubeus ───────────────────────────────────────
+  rubeus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Clone & Build Rubeus
+        run: |
+          git clone https://github.com/GhostPack/Rubeus.git
+          cd Rubeus
+          PROJECT=$(find . -name "*.csproj" | head -n 1)
+          FRAMEWORK=$(grep -oPm1 "(?<=<TargetFramework>)[^<]+" "$PROJECT")
+          dotnet restore "$PROJECT"
+          dotnet publish "$PROJECT" \
+            -c Release -f "$FRAMEWORK" -r win-x86 \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -o out/win-x86
+          zip -r ../rubeus-windows-x86.zip out/win-x86
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rubeus
+          path: rubeus-windows-x86.zip
+
+  # ── powerview ────────────────────────────────────────────────────────────────
+  powerview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch PowerView
+        run: |
+          wget -q https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/master/Recon/PowerView.ps1
+          zip powerview.zip PowerView.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: powerview
+          path: powerview.zip
+
+  # ── powersploit / powerup ────────────────────────────────────────────────────
+  powersploit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone PowerSploit
+        run: |
+          git clone https://github.com/PowerShellMafia/PowerSploit.git
+          zip -r powersploit.zip PowerSploit
+      - uses: actions/upload-artifact@v4
+        with:
+          name: powersploit
+          path: powersploit.zip
+
+  # ── lapsToolkit ─────────────────────────────────────────────────────────────
+  lapstoolkit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch LAPSToolkit
+        run: |
+          git clone https://github.com/leoloobeek/LAPSToolkit.git
+          zip lapstoolkit.zip LAPSToolkit/LAPSToolkit.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lapstoolkit
+          path: lapstoolkit.zip
+
+  # ── snaffler ─────────────────────────────────────────────────────────────────
+  snaffler:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Clone & Build Snaffler
+        run: |
+          git clone https://github.com/SnaffCon/Snaffler.git
+          cd Snaffler
+          PROJECT=$(find . -name "*.csproj" | grep -v Test | head -n 1)
+          FRAMEWORK=$(grep -oPm1 "(?<=<TargetFramework>)[^<]+" "$PROJECT")
+          dotnet restore "$PROJECT"
+          dotnet publish "$PROJECT" \
+            -c Release -f "$FRAMEWORK" -r win-x64 \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -o out/win-x64
+          zip -r ../snaffler-windows-x64.zip out/win-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snaffler
+          path: snaffler-windows-x64.zip
+
+  # ── inveigh ──────────────────────────────────────────────────────────────────
+  inveigh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Clone & Build Inveigh
+        run: |
+          git clone https://github.com/Kevin-Robertson/Inveigh.git
+          cd Inveigh
+          PROJECT=$(find . -name "*.csproj" | head -n 1)
+          FRAMEWORK=$(grep -oPm1 "(?<=<TargetFramework>)[^<]+" "$PROJECT")
+          dotnet restore "$PROJECT"
+          dotnet publish "$PROJECT" \
+            -c Release -f "$FRAMEWORK" -r win-x86 \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -o out/win-x86
+          zip -r ../inveigh-windows-x86.zip out/win-x86
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inveigh
+          path: inveigh-windows-x86.zip
+
+  # ── windapsearch ─────────────────────────────────────────────────────────────
+  windapsearch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone windapsearch
+        run: |
+          git clone https://github.com/ropnop/windapsearch.git
+          zip windapsearch.zip windapsearch/windapsearch.py windapsearch/requirements.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windapsearch
+          path: windapsearch.zip
+
+  # ── adidnsdump ───────────────────────────────────────────────────────────────
+  adidnsdump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install adidnsdump
+        run: |
+          pip3 install adidnsdump
+          mkdir adidns-tools
+          cp "$(which adidnsdump)" adidns-tools/ || true
+          zip adidnsdump.zip adidns-tools/adidnsdump
+      - uses: actions/upload-artifact@v4
+        with:
+          name: adidnsdump
+          path: adidnsdump.zip
+
+  # ── DomainPasswordSpray ──────────────────────────────────────────────────────
+  domainpasswordspray:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch DomainPasswordSpray
+        run: |
+          wget -q https://raw.githubusercontent.com/dafthack/DomainPasswordSpray/master/DomainPasswordSpray.ps1
+          zip domainpasswordspray.zip DomainPasswordSpray.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: domainpasswordspray
+          path: domainpasswordspray.zip
+
+  # ── PowerUpSQL ───────────────────────────────────────────────────────────────
+  powerupsql:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone PowerUpSQL
+        run: |
+          git clone https://github.com/NetSPI/PowerUpSQL.git
+          zip powerupsql.zip PowerUpSQL/PowerUpSQL.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: powerupsql
+          path: powerupsql.zip
+
+  # ── responder ─────────────────────────────────────────────────────────────────
+  responder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone Responder
+        run: |
+          git clone https://github.com/lgandx/Responder.git
+          zip -r responder.zip Responder
+      - uses: actions/upload-artifact@v4
+        with:
+          name: responder
+          path: responder.zip
+
+  # ── PKINITtools ──────────────────────────────────────────────────────────────
+  pkinittools:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone PKINITtools
+        run: |
+          git clone https://github.com/dirkjanm/PKINITtools.git
+          zip -r pkinittools.zip PKINITtools
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkinittools
+          path: pkinittools.zip
+
+  # ── noPac ────────────────────────────────────────────────────────────────────
+  nopac:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone noPac
+        run: |
+          git clone https://github.com/Ridter/noPac.git
+          zip -r nopac.zip noPac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nopac
+          path: nopac.zip
