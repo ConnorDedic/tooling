@@ -1,71 +1,63 @@
-name: Build Toolkit Release
+name: Build and Release Toolkit
 
 on:
+  workflow_dispatch:   # allows manual runs
   push:
     tags:
-      - 'v*'  # Only trigger on version tags like v1.0, v2.0
-  workflow_dispatch:
+      - 'v*'
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  ARTIFACTS_DIR: artifacts
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  TEMP_DIR: artifacts
 
 jobs:
   build-toolkit:
     runs-on: windows-latest
-
     steps:
-      # 1️⃣ Checkout repository
-      - name: Checkout Repo
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      # 2️⃣ Create artifacts folder
-      - name: Prepare Artifacts Folder
-        run: |
-          if (!(Test-Path $Env:ARTIFACTS_DIR)) { New-Item -ItemType Directory -Path $Env:ARTIFACTS_DIR }
+      - name: Setup Node 24
+        uses: actions/setup-node@v3
+        with:
+          node-version: 24
 
-      # 3️⃣ Download Ghostpack + other tools
-      - name: Download Tools
-        shell: pwsh
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.23
+
+      - name: Create artifacts folder
+        run: mkdir $env:TEMP_DIR
+
+      - name: Download GhostPack Tools & Extras
         run: |
           function Get-LatestAsset($repo, $filter, $out) {
-              $releases = gh release list -R $repo --limit 1 --json tagName,assets
-              if ($releases.Count -eq 0) { Write-Warning "No releases found for $repo"; return }
-              $release = $releases[0]
+              $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers @{ "User-Agent" = "PowerShell" }
               $asset = $release.assets | Where-Object { $_.name -like "*$filter*" } | Select-Object -First 1
-              if ($null -eq $asset) { Write-Warning "No matching asset for $repo with filter $filter"; return }
-              gh release download $release.tagName -R $repo -p $asset.name -D $Env:ARTIFACTS_DIR
+              if ($null -eq $asset) {
+                  Write-Warning "No matching asset for $repo with filter $filter"
+                  return
+              }
+              Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$env:TEMP_DIR\$($asset.name)"
           }
 
-          # Ghostpack tools
-          Get-LatestAsset "GhostPack/Rubeus" "zip" "rubeus.zip"
-          Get-LatestAsset "BloodHoundAD/SharpHound" "zip" "sharphound.zip"
-          Get-LatestAsset "GhostPack/Inveigh" "zip" "inveigh.zip"
-          Get-LatestAsset "GhostPack/Snaffler" "zip" "snaffler.zip"
+          # GhostPack tools
+          Get-LatestAsset "BloodHoundAD/SharpHound" "windows_x86.zip" "SharpHound.zip"
+          Get-LatestAsset "GhostPack/Rubeus" "exe" "Rubeus.exe"
+          Get-LatestAsset "gentilkiwi/mimikatz" "trunk.zip" "Mimikatz.zip"
+          Get-LatestAsset "ropnop/kerbrute" "windows_386.exe" "Kerbrute.exe"
+          Get-LatestAsset "GhostPack/Snaffler" "exe" "Snaffler.exe"
+          Get-LatestAsset "GhostPack/Inveigh" "exe" "Inveigh.exe"
+          Get-LatestAsset "Porchetta-Industries/CrackMapExec" "cme-*.zip" "CME.zip"
+          Get-LatestAsset "nmap/nmap" "zip" "Nmap.zip"  # If available
 
-          # Mimikatz
-          Get-LatestAsset "gentilkiwi/mimikatz" "zip" "mimikatz.zip"
+      - name: List downloaded artifacts
+        run: Get-ChildItem $env:TEMP_DIR
 
-          # Kerbrute
-          Get-LatestAsset "ropnop/kerbrute" "windows_386" "kerbrute.exe"
-
-          # CrackMapExec (Windows)
-          Get-LatestAsset "Porchetta-Industries/CrackMapExec" "windows" "cme.zip"
-
-          # Nmap (direct download fallback if not in GH)
-          $nmapUrl = "https://nmap.org/dist/nmap-7.94-setup.exe"
-          Invoke-WebRequest $nmapUrl -OutFile "$Env:ARTIFACTS_DIR\nmap-7.94-setup.exe"
-
-      # 4️⃣ Create a single combined zip
-      - name: Package Toolkit
-        shell: pwsh
-        run: |
-          Compress-Archive -Path "$Env:ARTIFACTS_DIR\*" -DestinationPath "$Env:ARTIFACTS_DIR\Toolkit-$GITHUB_REF_NAME.zip" -Force
-
-      # 5️⃣ Create GitHub Release and upload artifacts
-      - name: Publish Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: "$Env:ARTIFACTS_DIR\Toolkit-$GITHUB_REF_NAME.zip"
+          files: ${{ env.TEMP_DIR }}\*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
