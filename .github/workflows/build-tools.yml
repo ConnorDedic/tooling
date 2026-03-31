@@ -143,7 +143,8 @@ jobs:
           git clone https://github.com/GhostPack/Rubeus.git
           cd Rubeus\Rubeus
 
-          msbuild Rubeus.csproj /p:Configuration=Release
+          # Use dotnet build instead of msbuild
+          dotnet build Rubeus.csproj -c Release -f net48
 
           $exe = Get-ChildItem -Recurse -Filter Rubeus.exe | Select-Object -First 1
 
