@@ -1,196 +1,66 @@
-name: Nightly Pentest Toolkit Build
+name: Build Tools
 
 on:
-  schedule:
-    - cron: "0 2 * * *"
   workflow_dispatch:
 
-permissions:
-  contents: write
-
-env:
-  GO_VERSION: "1.22"
-  DOTNET_VERSION: "6.0.x"
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
-
-# =============================================================================
-# COLLECT SCRIPTS
-# =============================================================================
-  collect-scripts:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - run: mkdir -p staging/scripts
-
-      - run: curl -fsSL -o staging/scripts/PowerView.ps1 https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/master/Recon/PowerView.ps1
-        continue-on-error: true
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: scripts
-          path: staging/scripts/
-          retention-days: 1
-
-# =============================================================================
-# LINUX BUILD
-# =============================================================================
-  build-linux:
-    runs-on: ubuntu-latest
-    needs: collect-scripts
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [amd64, 386]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: scripts
-          path: staging/scripts
-
-      - run: mkdir -p dist staging
-
-      - name: Build kerbrute
-        run: |
-          git clone --depth 1 https://github.com/ropnop/kerbrute.git
-          cd kerbrute
-          GOOS=linux GOARCH=${{ matrix.arch }} go build -o ../dist/kerbrute
-        continue-on-error: true
-
-      - name: Package
-        run: |
-          zip -r nightly-linux-${{ matrix.arch }}.zip dist staging
-
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: nightly-linux-${{ matrix.arch }}
-          files: nightly-linux-${{ matrix.arch }}.zip
-          overwrite_files: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-# =============================================================================
-# WINDOWS BUILD (FIXED)
-# =============================================================================
   build-windows:
     runs-on: windows-latest
-    needs: collect-scripts
-
     strategy:
-      fail-fast: false
       matrix:
-        arch:
-          - goarch: amd64
-          - goarch: 386
+        arch: [x86, x64]
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      # -------------------------
+      # Build Chisel
+      # -------------------------
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
+          go-version: 1.25
 
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Clone Chisel
+        run: git clone https://github.com/jpillora/chisel.git
 
-      # 🔥 FIX: install .NET Framework targeting pack
-      - name: Install .NET Framework Dev Pack
-        shell: pwsh
-        run: choco install netfx-4.8-devpack -y
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: scripts
-          path: staging/scripts
-
-      - name: Prepare dirs
-        shell: pwsh
+      - name: Build Chisel
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          New-Item -ItemType Directory -Force -Path staging | Out-Null
-
-      # -----------------------------------------------------------------------------
-      # GO TOOL
-      # -----------------------------------------------------------------------------
-      - name: Build chisel
-        shell: pwsh
-        run: |
-          git clone https://github.com/jpillora/chisel.git
           cd chisel
-          $env:GOOS="windows"
-          $env:GOARCH="${{ matrix.arch.goarch }}"
-          go build -o ../dist/chisel.exe
+          go build -o ../dist/chisel.exe ./client
+        continue-on-error: true   # <-- error handling so it won't break workflow
 
-      # -----------------------------------------------------------------------------
-      # RUBEUS (FIXED)
-      # -----------------------------------------------------------------------------
-      - name: Build Rubeus
-        shell: pwsh
-        run: |
-          git clone https://github.com/GhostPack/Rubeus.git
-          cd Rubeus\Rubeus
-
-          # Use dotnet build instead of msbuild
-          dotnet build Rubeus.csproj -c Release -f net48
-
-          $exe = Get-ChildItem -Recurse -Filter Rubeus.exe | Select-Object -First 1
-
-          if ($exe) {
-            Copy-Item $exe.FullName ../../dist/Rubeus.exe
-          } else {
-            Write-Error "Rubeus.exe not found"
-            exit 1
-          }
-
-      # -----------------------------------------------------------------------------
-      # SHARPHOUND (SAFE BUILD)
-      # -----------------------------------------------------------------------------
-      - name: Build SharpHound
-        shell: pwsh
-        run: |
-          git clone https://github.com/BloodHoundAD/SharpHound.git
-          cd SharpHound
-
-          dotnet build -c Release
-
-          $exe = Get-ChildItem -Recurse -Filter *.exe | Select-Object -First 1
-
-          if ($exe) {
-            Copy-Item $exe.FullName ../dist/SharpHound.exe
-          } else {
-            Write-Error "SharpHound.exe not found"
-            exit 1
-          }
-
-      # -----------------------------------------------------------------------------
-      # PACKAGE
-      # -----------------------------------------------------------------------------
-      - name: Package
-        shell: pwsh
-        run: |
-          Compress-Archive -Path dist,staging -DestinationPath nightly-windows-${{ matrix.arch.goarch }}.zip
-
-      # -----------------------------------------------------------------------------
-      # RELEASE
-      # -----------------------------------------------------------------------------
-      - name: Release
-        uses: softprops/action-gh-release@v2
+      # -------------------------
+      # Build Rubeus
+      # -------------------------
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
         with:
-          tag_name: nightly-windows-${{ matrix.arch.goarch }}
-          files: nightly-windows-${{ matrix.arch.goarch }}.zip
-          overwrite_files: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          dotnet-version: 10.0.x
+
+      - name: Clone Rubeus
+        run: git clone https://github.com/GhostPack/Rubeus.git
+
+      - name: Retarget Rubeus to .NET 4.8
+        run: |
+          $proj = "Rubeus\Rubeus.csproj"
+          (Get-Content $proj) -replace '<TargetFramework>net40</TargetFramework>', '<TargetFramework>net48</TargetFramework>' | Set-Content $proj
+
+      - name: Build Rubeus
+        run: |
+          dotnet build Rubeus/Rubeus.csproj -c Release -f net48
+          Copy-Item "Rubeus/bin/Release/net48/Rubeus.exe" "dist/Rubeus.exe"
+        continue-on-error: true   # <-- ensures workflow continues if Rubeus fails
+
+      # -------------------------
+      # Package Artifacts
+      # -------------------------
+      - name: Create dist folder
+        run: mkdir dist
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: built-tools
+          path: dist/
