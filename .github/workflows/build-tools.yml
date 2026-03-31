@@ -4,10 +4,11 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  build:
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        os: [windows-latest, ubuntu-latest]
         arch: [x86, x64]
 
     steps:
@@ -15,7 +16,13 @@ jobs:
         uses: actions/checkout@v4
 
       # -------------------------
-      # Build Chisel
+      # Create output directory
+      # -------------------------
+      - name: Create dist folder
+        run: mkdir -p dist
+
+      # -------------------------
+      # Build Chisel (Go)
       # -------------------------
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -28,37 +35,38 @@ jobs:
       - name: Build Chisel
         run: |
           cd chisel
-          go build -o ../dist/chisel.exe ./client
-        continue-on-error: true   # <-- error handling so it won't break workflow
+          go build -o ../dist/chisel-${{ matrix.arch }}.exe ./client
+        continue-on-error: true
 
       # -------------------------
-      # Build Rubeus
+      # Build Rubeus (Windows only)
       # -------------------------
       - name: Setup .NET SDK
+        if: runner.os == 'Windows'
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
 
       - name: Clone Rubeus
+        if: runner.os == 'Windows'
         run: git clone https://github.com/GhostPack/Rubeus.git
 
       - name: Retarget Rubeus to .NET 4.8
+        if: runner.os == 'Windows'
         run: |
-          $proj = "Rubeus\Rubeus.csproj"
+          $proj = ".\Rubeus\Rubeus.csproj"
           (Get-Content $proj) -replace '<TargetFramework>net40</TargetFramework>', '<TargetFramework>net48</TargetFramework>' | Set-Content $proj
 
       - name: Build Rubeus
+        if: runner.os == 'Windows'
         run: |
-          dotnet build Rubeus/Rubeus.csproj -c Release -f net48
-          Copy-Item "Rubeus/bin/Release/net48/Rubeus.exe" "dist/Rubeus.exe"
-        continue-on-error: true   # <-- ensures workflow continues if Rubeus fails
+          dotnet build .\Rubeus\Rubeus.csproj -c Release -f net48
+          Copy-Item ".\Rubeus\bin\Release\net48\Rubeus.exe" ".\dist\Rubeus-${{ matrix.arch }}.exe"
+        continue-on-error: true
 
       # -------------------------
-      # Package Artifacts
+      # Upload artifacts
       # -------------------------
-      - name: Create dist folder
-        run: mkdir dist
-
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
