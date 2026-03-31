@@ -139,37 +139,36 @@ jobs:
         shell: pwsh
         run: |
           $buildSucceeded = $false
-
           try {
               git clone https://github.com/GhostPack/Rubeus.git
               cd Rubeus\Rubeus
 
               Write-Host "Attempting to build Rubeus..."
-              msbuild Rubeus.csproj /p:Configuration=Release -ErrorAction Stop
-
-              $exe = Get-ChildItem -Recurse -Filter Rubeus.exe | Select-Object -First 1
-              if ($exe) {
-                  Copy-Item $exe.FullName ../../dist/Rubeus.exe
-                  Write-Host "Rubeus built successfully."
-                  $buildSucceeded = $true
+              if (Get-Command msbuild -ErrorAction SilentlyContinue) {
+                  msbuild Rubeus.csproj /p:Configuration=Release -ErrorAction Stop
+                  $exe = Get-ChildItem -Recurse -Filter Rubeus.exe | Select-Object -First 1
+                  if ($exe) {
+                      Copy-Item $exe.FullName ../../dist/Rubeus.exe
+                      Write-Host "Rubeus built successfully."
+                      $buildSucceeded = $true
+                  }
               } else {
-                  throw "Rubeus.exe not found after build"
+                  Write-Warning "MSBuild not found; skipping build."
               }
           } catch {
               Write-Warning "Rubeus build failed: $_"
-              Write-Host "Attempting to download precompiled Rubeus..."
-              $rubeusUrl = "https://github.com/GhostPack/Rubeus/releases/latest/download/Rubeus.exe"
-              Invoke-WebRequest -Uri $rubeusUrl -OutFile ../../dist/Rubeus.exe
-              if (Test-Path ../../dist/Rubeus.exe) {
-                  Write-Host "Precompiled Rubeus downloaded successfully."
-                  $buildSucceeded = $true
-              } else {
-                  Write-Warning "Failed to get precompiled Rubeus."
-              }
           }
 
           if (-not $buildSucceeded) {
-              Write-Warning "Rubeus is missing, but workflow will continue."
+              Write-Warning "Rubeus not built. Using repository fallback..."
+              # Fallback: copy from a stored artifact in repo if available
+              if (Test-Path "./fallback/Rubeus.exe") {
+                  Copy-Item "./fallback/Rubeus.exe" "../../dist/Rubeus.exe"
+                  Write-Host "Rubeus copied from fallback."
+                  $buildSucceeded = $true
+              } else {
+                  Write-Warning "No fallback Rubeus available. Workflow continues without it."
+              }
           }
 
       # -----------------------------------------------------------------------------
